@@ -39,7 +39,7 @@ FOOTBALL_WORDS = (
     "забарн", "довбик", "мудрик", "гол ", "голи", "воротар", "півзахисник",
     "нападник", "захисник", "уєфа", "фіфа", "футзал",
 )
-SKIP_WORDS = ("прогноз", "ставк", "букмекер", "бонус")
+SKIP_WORDS = ("прогноз", "ставк", "букмекер", "бонус", "трансляц", "дивитись онлайн")
 
 
 def local(tag):
@@ -146,6 +146,43 @@ def fetch_article(url):
     return "\n".join(p for p in paras if len(p) > 50)[:4000], image
 
 
+_model_cache = {}
+GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
+
+
+def pick_model():
+    """Asks Google which models this key can use and picks a text 'flash' model."""
+    if "name" in _model_cache:
+        return _model_cache["name"]
+    names = []
+    try:
+        r = requests.get(f"{GEMINI_API}/models", params={"key": GEMINI_KEY, "pageSize": 200}, timeout=30)
+        r.raise_for_status()
+        for m in r.json().get("models", []):
+            if "generateContent" in m.get("supportedGenerationMethods", []):
+                names.append(m["name"].split("/", 1)[-1])
+    except Exception as e:
+        print("  could not list Gemini models:", e)
+    print("  Gemini models available for this key:", ", ".join(names) or "none")
+    bad = ("tts", "image", "live", "audio", "embedding", "computer", "robotics", "vision", "omni")
+    cands = [n for n in names if "flash" in n and not any(b in n for b in bad)]
+    cands.sort(key=lambda n: ("preview" in n or "exp" in n, "lite" in n, n))
+    _model_cache["name"] = cands[0] if cands else ""
+    print("  chosen Gemini model:", _model_cache["name"] or "none")
+    return _model_cache["name"]
+
+
+def call_gemini(model, prompt):
+    r = requests.post(
+        f"{GEMINI_API}/models/{model}:generateContent",
+        params={"key": GEMINI_KEY},
+        json={"contents": [{"parts": [{"text": prompt}]}]},
+        timeout=60,
+    )
+    r.raise_for_status()
+    return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
 def rewrite(title, text):
     """Returns (headline, body). Uses Gemini if a key is set."""
     if GEMINI_KEY:
@@ -153,19 +190,23 @@ def rewrite(title, text):
             "Ти редактор українського футбольного Telegram-каналу «football 90+». "
             "Перепиши новину своїми словами українською: 350-600 символів, "
             "жива мова, без посилань, без згадок джерела чи сайту, лише факти з тексту. "
+            "Не вигадуй деталей, яких немає в тексті. "
             "Формат відповіді: перший рядок - короткий заголовок з одним доречним емодзі "
             "на початку, далі порожній рядок і текст.\n\n"
             f"Заголовок: {title}\n\nТекст:\n{text}"
         )
         try:
-            r = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-                params={"key": GEMINI_KEY},
-                json={"contents": [{"parts": [{"text": prompt}]}]},
-                timeout=60,
-            )
-            r.raise_for_status()
-            out = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            model = _model_cache.get("name") or GEMINI_MODEL
+            try:
+                out = call_gemini(model, prompt)
+            except requests.HTTPError as e:
+                if e.response is not None and e.response.status_code == 404:
+                    alt = pick_model()
+                    if not alt:
+                        raise
+                    out = call_gemini(alt, prompt)
+                else:
+                    raise
             head, _, body = out.partition("\n")
             head, body = head.strip().strip("*#").strip(), body.strip()
             if head and body:
