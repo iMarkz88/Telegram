@@ -32,6 +32,7 @@ jobs:
           TELEGRAM_CHANNEL: "@football_90_pluss"
           USE_SOURCE_IMAGE: "true"
           MAX_PER_RUN: "3"
+          GEMINI_MODEL: "gemini-2.5-flash"
         run: python post_news.py
 
       - name: Save state
