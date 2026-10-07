@@ -1,84 +1,149 @@
-"""Collects football news and posts them to a Telegram channel.
-
-Flow: read the news list -> find new articles -> rewrite the text
-(Gemini, optional) -> send to the channel via the Telegram Bot API.
-"""
+"""Reads RSS feeds from feeds.txt and posts new football news to a Telegram channel."""
+import email.utils
+import hashlib
 import html
 import json
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
 
-LIST_URL = "https://sport.ua/uk/football"
 CHANNEL = os.environ.get("TELEGRAM_CHANNEL", "@football_90_pluss")
-TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-# "true" -> use the article's own photo. Their site terms forbid this
-# without written permission, so it is OFF by default.
 USE_SOURCE_IMAGE = os.environ.get("USE_SOURCE_IMAGE", "false").lower() == "true"
+FETCH_ARTICLE = os.environ.get("FETCH_ARTICLE", "true").lower() == "true"
+FOOTBALL_ONLY = os.environ.get("FOOTBALL_ONLY", "true").lower() == "true"
 MAX_PER_RUN = int(os.environ.get("MAX_PER_RUN", "3"))
 STATE_FILE = Path("posted.json")
+FEEDS_FILE = Path("feeds.txt")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
     "Accept-Language": "uk-UA,uk;q=0.9",
 }
-NEWS_RE = re.compile(r"^https://sport\.ua/uk/news/(\d+)-")
-SKIP_WORDS = ("прогноз", "ставк", "букмекер", "бонус", "анонс")
+
+# Words that mark a news item as football (lowercase, matched as substrings).
+FOOTBALL_WORDS = (
+    "футбол", "матч", "збірн", "упл", "прем'єр-ліг", "прем’єр-ліг", "ліга чемпіонів",
+    "ліга європи", "ліга конференцій", "ліга націй", "чемпіонат", "кубок", "трансфер",
+    "тренер", "динамо", "шахтар", "барселон", "реал", "ліверпул", "арсенал", "челсі",
+    "манчестер", "баварі", "ювентус", "мілан", "інтер", "псж", "мессі", "роналду",
+    "забарн", "довбик", "мудрик", "гол ", "голи", "воротар", "півзахисник",
+    "нападник", "захисник", "уєфа", "фіфа", "футзал",
+)
+SKIP_WORDS = ("прогноз", "ставк", "букмекер", "бонус")
 
 
-def get_latest():
-    """Returns {article_id: (url, title)} from the football page."""
-    r = requests.get(LIST_URL, headers=HEADERS, timeout=30)
+def local(tag):
+    return tag.split("}")[-1]
+
+
+def to_text(markup):
+    return BeautifulSoup(markup or "", "html.parser").get_text(" ", strip=True)
+
+
+def parse_date(value):
+    if not value:
+        return 0.0
+    try:
+        return email.utils.parsedate_to_datetime(value).timestamp()
+    except Exception:
+        pass
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return 0.0
+
+
+def parse_feed(xml_bytes):
+    """Parses RSS 2.0 or Atom. Returns list of dicts."""
+    root = ET.fromstring(xml_bytes)
+    out = []
+    for el in root.iter():
+        if local(el.tag) not in ("item", "entry"):
+            continue
+        d = {"title": "", "link": "", "summary": "", "content": "", "image": "", "ts": 0.0}
+        for ch in el:
+            name = local(ch.tag)
+            text = (ch.text or "").strip()
+            if name == "title":
+                d["title"] = to_text(text)
+            elif name == "link":
+                href = ch.attrib.get("href")
+                if href:
+                    if ch.attrib.get("rel", "alternate") == "alternate" or not d["link"]:
+                        d["link"] = href
+                elif text:
+                    d["link"] = text
+            elif name in ("description", "summary"):
+                d["summary"] = text
+            elif name in ("encoded", "content") and text:
+                d["content"] = text
+            elif name in ("pubDate", "published", "updated", "date"):
+                d["ts"] = d["ts"] or parse_date(text)
+            elif name in ("content", "thumbnail") and ch.attrib.get("url"):
+                d["image"] = d["image"] or ch.attrib["url"]
+            elif name == "enclosure" and ch.attrib.get("url"):
+                if ch.attrib.get("type", "image").startswith("image"):
+                    d["image"] = d["image"] or ch.attrib["url"]
+        # media:content / media:thumbnail (names clash with "content" above)
+        for ch in el:
+            if local(ch.tag) in ("content", "thumbnail") and ch.attrib.get("url"):
+                t = ch.attrib.get("type", "image")
+                if t.startswith("image") or ch.attrib.get("medium") == "image" \
+                        or local(ch.tag) == "thumbnail":
+                    d["image"] = d["image"] or ch.attrib["url"]
+        if not d["image"]:
+            m = re.search(r'<img[^>]+src=["\']([^"\']+)', d["content"] + d["summary"])
+            if m:
+                d["image"] = html.unescape(m.group(1))
+        if d["link"] and d["title"]:
+            out.append(d)
+    return out
+
+
+def fetch_feed(url):
+    r = requests.get(url, headers=HEADERS, timeout=30)
     r.raise_for_status()
-    soup = BeautifulSoup(r.text, "html.parser")
-    found = {}
-    for a in soup.find_all("a", href=True):
-        href = a["href"].split("#")[0]
-        if href.startswith("/"):
-            href = "https://sport.ua" + href
-        m = NEWS_RE.match(href)
-        title = a.get_text(" ", strip=True)
-        if not m or len(title) < 15:
-            continue
-        if any(w in title.lower() for w in SKIP_WORDS):
-            continue
-        found.setdefault(int(m.group(1)), (href, title))
-    return found
+    return parse_feed(r.content)
 
 
-def load_state():
-    if STATE_FILE.exists():
-        return set(json.loads(STATE_FILE.read_text()))
-    return None
+def is_football(item):
+    blob = (item["title"] + " " + to_text(item["summary"])).lower() + " "
+    if any(w in blob for w in SKIP_WORDS):
+        return False
+    return (not FOOTBALL_ONLY) or any(w in blob for w in FOOTBALL_WORDS)
 
 
-def save_state(ids):
-    STATE_FILE.write_text(json.dumps(sorted(ids)[-500:]))
+def item_key(item):
+    return hashlib.sha1(item["link"].encode()).hexdigest()[:16]
 
 
 def fetch_article(url):
-    r = requests.get(url, headers=HEADERS, timeout=30)
-    r.raise_for_status()
+    """Best effort: full text and og:image. Returns ("", "") if the site refuses."""
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=20)
+        r.raise_for_status()
+    except Exception as e:
+        print("  article not available:", e)
+        return "", ""
     soup = BeautifulSoup(r.text, "html.parser")
-
-    def meta(prop):
-        tag = soup.find("meta", property=prop)
-        return tag["content"].strip() if tag and tag.get("content") else ""
-
-    title, desc, image = meta("og:title"), meta("og:description"), meta("og:image")
+    tag = soup.find("meta", property="og:image")
+    image = tag["content"].strip() if tag and tag.get("content") else ""
     box = soup.find("article") or soup
     paras = [p.get_text(" ", strip=True) for p in box.find_all("p")]
-    text = "\n".join(p for p in paras if len(p) > 50)[:4000] or desc
-    if "social_logo" in image:
-        image = ""
-    return title, text, image
+    return "\n".join(p for p in paras if len(p) > 50)[:4000], image
 
 
 def rewrite(title, text):
@@ -102,12 +167,11 @@ def rewrite(title, text):
             r.raise_for_status()
             out = r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
             head, _, body = out.partition("\n")
-            head = head.strip().strip("*#").strip()
-            body = body.strip()
+            head, body = head.strip().strip("*#").strip(), body.strip()
             if head and body:
                 return head, body
-        except Exception as e:  # fall back to the plain text below
-            print("Gemini failed:", e)
+        except Exception as e:
+            print("  Gemini failed:", e)
     return "⚽ " + title, text[:500]
 
 
@@ -125,7 +189,7 @@ def build_caption(head, body, limit=1024):
 
 
 def send(caption, image):
-    api = f"https://api.telegram.org/bot{TOKEN}"
+    api = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}"
     if image:
         r = requests.post(
             f"{api}/sendPhoto",
@@ -134,7 +198,7 @@ def send(caption, image):
         )
         if r.ok:
             return
-        print("sendPhoto failed, sending text only:", r.text)
+        print("  sendPhoto failed, sending text only:", r.text[:200])
     r = requests.post(
         f"{api}/sendMessage",
         data={"chat_id": CHANNEL, "text": caption, "parse_mode": "HTML",
@@ -144,31 +208,89 @@ def send(caption, image):
     r.raise_for_status()
 
 
+def load_feeds():
+    urls = []
+    if FEEDS_FILE.exists():
+        for line in FEEDS_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                urls.append(line)
+    urls += [u.strip() for u in os.environ.get("FEEDS", "").split() if u.strip()]
+    return urls
+
+
+def load_state():
+    if not STATE_FILE.exists():
+        return None
+    data = json.loads(STATE_FILE.read_text())
+    if isinstance(data, list):  # old format
+        data = {"seen": data, "feeds": []}
+    return data
+
+
+def save_state(seen, feeds):
+    STATE_FILE.write_text(json.dumps({"seen": list(seen)[-1500:], "feeds": sorted(feeds)}))
+
+
 def main():
-    latest = get_latest()
-    if not latest:
-        print("No articles found - the site layout may have changed.")
-        sys.exit(1)
+    if "TELEGRAM_BOT_TOKEN" not in os.environ:
+        sys.exit("TELEGRAM_BOT_TOKEN is not set")
+    feeds = load_feeds()
+    if not feeds:
+        sys.exit("feeds.txt has no feed URLs")
 
-    posted = load_state()
-    if posted is None:  # first run: remember current news, post nothing
-        save_state(set(latest))
-        print(f"First run: remembered {len(latest)} articles, nothing posted.")
-        return
+    state = load_state()
+    first_run = state is None
+    state = state or {"seen": [], "feeds": []}
+    seen = list(state["seen"])
+    seen_set = set(seen)
+    known_feeds = set(state["feeds"])
 
-    new_ids = sorted(i for i in latest if i not in posted)
-    to_post = new_ids[-MAX_PER_RUN:]
-    for i in to_post:
-        url, list_title = latest[i]
+    ok_feeds, candidates = 0, []
+    for url in feeds:
         try:
-            title, text, image = fetch_article(url)
-            head, body = rewrite(title or list_title, text)
-            send(build_caption(head, body), image if USE_SOURCE_IMAGE else "")
-            print("Posted:", list_title)
+            items = fetch_feed(url)
         except Exception as e:
-            print("Failed:", list_title, e)
-            new_ids.remove(i)  # try again next run
-    save_state(posted | set(new_ids))
+            print("Feed failed:", url, "->", e)
+            continue
+        ok_feeds += 1
+        print(f"Feed ok: {url} ({len(items)} items)")
+        baseline = first_run or url not in known_feeds  # do not flood on first sight
+        known_feeds.add(url)
+        for it in items:
+            k = item_key(it)
+            if k in seen_set:
+                continue
+            if baseline or not is_football(it):
+                seen.append(k); seen_set.add(k)
+                continue
+            candidates.append((k, it))
+
+    if ok_feeds == 0:
+        sys.exit("No feed could be read - run 'Check feeds' to see which ones work.")
+
+    candidates.sort(key=lambda c: c[1]["ts"])
+    for k, _ in candidates[:-MAX_PER_RUN] if len(candidates) > MAX_PER_RUN else []:
+        seen.append(k); seen_set.add(k)  # too old to post, just remember
+
+    for k, it in candidates[-MAX_PER_RUN:]:
+        print("Posting:", it["title"])
+        try:
+            text = to_text(it["content"]) or to_text(it["summary"])
+            image = it["image"]
+            if FETCH_ARTICLE:
+                full, og = fetch_article(it["link"])
+                if len(full) > len(text):
+                    text = full
+                image = image or og
+            head, body = rewrite(it["title"], text or it["title"])
+            send(build_caption(head, body), image if USE_SOURCE_IMAGE else "")
+            seen.append(k); seen_set.add(k)
+        except Exception as e:
+            print("  failed, will retry next run:", e)
+
+    save_state(seen, known_feeds)
+    print("Done.")
 
 
 if __name__ == "__main__":
