@@ -146,14 +146,14 @@ def fetch_article(url):
     return "\n".join(p for p in paras if len(p) > 50)[:4000], image
 
 
-_model_cache = {}
+_state = {"cands": None, "good": "", "failed": set()}
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
 
 
-def pick_model():
-    """Asks Google which models this key can use and picks a text 'flash' model."""
-    if "name" in _model_cache:
-        return _model_cache["name"]
+def list_candidates():
+    """Asks Google which models this key can use; returns text 'flash' models, best first."""
+    if _state["cands"] is not None:
+        return _state["cands"]
     names = []
     try:
         r = requests.get(f"{GEMINI_API}/models", params={"key": GEMINI_KEY, "pageSize": 200}, timeout=30)
@@ -163,13 +163,13 @@ def pick_model():
                 names.append(m["name"].split("/", 1)[-1])
     except Exception as e:
         print("  could not list Gemini models:", e)
-    print("  Gemini models available for this key:", ", ".join(names) or "none")
-    bad = ("tts", "image", "live", "audio", "embedding", "computer", "robotics", "vision", "omni")
+    bad = ("tts", "image", "live", "audio", "embedding", "computer", "robotics", "vision",
+           "omni", "transcribe", "lyria", "antigravity", "research", "customtools")
     cands = [n for n in names if "flash" in n and not any(b in n for b in bad)]
     cands.sort(key=lambda n: ("preview" in n or "exp" in n, "lite" in n, n))
-    _model_cache["name"] = cands[0] if cands else ""
-    print("  chosen Gemini model:", _model_cache["name"] or "none")
-    return _model_cache["name"]
+    print("  Gemini will try these models in order:", ", ".join(cands[:8]) or "none")
+    _state["cands"] = cands
+    return cands
 
 
 def call_gemini(model, prompt):
@@ -179,8 +179,36 @@ def call_gemini(model, prompt):
         json={"contents": [{"parts": [{"text": prompt}]}]},
         timeout=60,
     )
-    r.raise_for_status()
+    if r.status_code >= 400:
+        print(f"  model {model}: HTTP {r.status_code} {r.text[:300]}")
+        r.raise_for_status()
     return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+
+def ask_gemini(prompt):
+    """Tries the working model first, then others. Returns text or raises."""
+    if _state["good"]:
+        return call_gemini(_state["good"], prompt)
+    order = [GEMINI_MODEL] + [m for m in list_candidates() if m != GEMINI_MODEL]
+    tried = 0
+    for model in order:
+        if model in _state["failed"]:
+            continue
+        if tried >= 8:
+            break
+        tried += 1
+        try:
+            out = call_gemini(model, prompt)
+            _state["good"] = model
+            print("  Gemini model that works:", model)
+            return out
+        except requests.HTTPError as e:
+            code = e.response.status_code if e.response is not None else 0
+            if code in (404, 400):
+                _state["failed"].add(model)
+                continue  # try the next model
+            raise
+    raise RuntimeError("no Gemini model answered")
 
 
 def rewrite(title, text):
@@ -196,17 +224,7 @@ def rewrite(title, text):
             f"Заголовок: {title}\n\nТекст:\n{text}"
         )
         try:
-            model = _model_cache.get("name") or GEMINI_MODEL
-            try:
-                out = call_gemini(model, prompt)
-            except requests.HTTPError as e:
-                if e.response is not None and e.response.status_code == 404:
-                    alt = pick_model()
-                    if not alt:
-                        raise
-                    out = call_gemini(alt, prompt)
-                else:
-                    raise
+            out = ask_gemini(prompt)
             head, _, body = out.partition("\n")
             head, body = head.strip().strip("*#").strip(), body.strip()
             if head and body:
