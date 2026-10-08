@@ -36,8 +36,9 @@ MAX_AGE_HOURS = float(os.environ.get("MAX_AGE_HOURS", "6"))
 # Rhythm: one post at most every POST_INTERVAL_MIN minutes, no matter how often the bot runs.
 POST_INTERVAL_MIN = float(os.environ.get("POST_INTERVAL_MIN", "20"))
 # Quiet hours in Kyiv time: no posts from QUIET_FROM (inclusive) to QUIET_TO (exclusive).
-QUIET_FROM = int(os.environ.get("QUIET_FROM", "21"))
-QUIET_TO = int(os.environ.get("QUIET_TO", "8"))
+# Format "21:30" (a plain "21" also works).
+QUIET_FROM = os.environ.get("QUIET_FROM", "21:30")
+QUIET_TO = os.environ.get("QUIET_TO", "07:30")
 QUIET_DISCARD = os.environ.get("QUIET_DISCARD", "true").lower() == "true"  # forget night news
 STATE_FILE = Path("posted.json")
 FEEDS_FILE = Path("feeds.txt")
@@ -337,17 +338,24 @@ def now_ts():
     return time.time()
 
 
-def kyiv_hour():
-    return datetime.now(ZoneInfo("Europe/Kyiv")).hour
+def to_minutes(value):
+    """'21:30' -> 1290, '8' -> 480 (minutes since midnight)."""
+    h, _, m = str(value).strip().partition(":")
+    return int(h) * 60 + int(m or 0)
+
+
+def kyiv_minutes():
+    t = datetime.now(ZoneInfo("Europe/Kyiv"))
+    return t.hour * 60 + t.minute
 
 
 def in_quiet_hours():
-    h = kyiv_hour()
-    if QUIET_FROM == QUIET_TO:
+    start, end, now = to_minutes(QUIET_FROM), to_minutes(QUIET_TO), kyiv_minutes()
+    if start == end:
         return False
-    if QUIET_FROM < QUIET_TO:
-        return QUIET_FROM <= h < QUIET_TO
-    return h >= QUIET_FROM or h < QUIET_TO
+    if start < end:
+        return start <= now < end
+    return now >= start or now < end  # the quiet period crosses midnight
 
 
 def load_feeds():
@@ -420,7 +428,7 @@ def main():
         if QUIET_DISCARD:  # night news are forgotten, the morning starts fresh
             for k, _ in candidates:
                 seen.append(k); seen_set.add(k)
-        print(f"Quiet hours ({QUIET_FROM}:00-{QUIET_TO}:00 Kyiv): not posting.")
+        print(f"Quiet hours ({QUIET_FROM}-{QUIET_TO} Kyiv): not posting.")
         save_state(seen, known_feeds, last_post)
         return
 
