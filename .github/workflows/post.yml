@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      quiz_now:
+        description: "Опублікувати вікторину зараз (тест)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -16,7 +21,7 @@ concurrency:
 jobs:
   post:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -43,9 +48,26 @@ jobs:
           RETRY_PAUSE_SEC: "60"
         run: python post_news.py
 
+      - name: Run quiz
+        if: ${{ !cancelled() }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
+          LLM2_MODEL: "openai/gpt-4o-mini"
+          TELEGRAM_CHANNEL: "@football_90_pluss"
+          QUIZ_TIME: "18:00"
+          QUIZ_FORCE: ${{ inputs.quiz_now }}
+          QUIET_FROM: "21:30"
+          QUIET_TO: "07:30"
+          RETRY_WINDOW_MIN: "4"
+          RETRY_PAUSE_SEC: "60"
+        run: python quiz.py
+
       - name: Save state
+        if: ${{ !cancelled() }}
         run: |
           git config user.name "news-bot"
           git config user.email "news-bot@users.noreply.github.com"
-          git add posted.json
+          git add posted.json quiz_state.json
           git diff --cached --quiet || (git commit -m "update state" && git push)
