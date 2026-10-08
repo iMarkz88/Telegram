@@ -35,8 +35,8 @@ jobs:
           USE_SOURCE_IMAGE: "true"
           MAX_PER_RUN: "1"
           POST_INTERVAL_MIN: "20"
-          QUIET_FROM: "21"
-          QUIET_TO: "8"
+          QUIET_FROM: "21:30"
+          QUIET_TO: "07:30"
           RETRY_WINDOW_MIN: "4"
           RETRY_PAUSE_SEC: "60"
         run: python post_news.py
