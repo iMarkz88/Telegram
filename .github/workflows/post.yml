@@ -2,7 +2,7 @@ name: Post football news
 
 on:
   schedule:
-    - cron: "*/20 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,6 +15,7 @@ concurrency:
 jobs:
   post:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -29,10 +30,15 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
           TELEGRAM_CHANNEL: "@football_90_pluss"
           USE_SOURCE_IMAGE: "true"
-          MAX_PER_RUN: "3"
-          GEMINI_MODEL: "gemini-2.5-flash"
+          MAX_PER_RUN: "1"
+          POST_INTERVAL_MIN: "20"
+          QUIET_FROM: "21"
+          QUIET_TO: "8"
+          RETRY_WINDOW_MIN: "4"
+          RETRY_PAUSE_SEC: "60"
         run: python post_news.py
 
       - name: Save state
