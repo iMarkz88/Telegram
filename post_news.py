@@ -6,20 +6,39 @@ import json
 import os
 import re
 import sys
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 from bs4 import BeautifulSoup
 
 CHANNEL = os.environ.get("TELEGRAM_CHANNEL", "@football_90_pluss")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+# Optional second AI (any OpenAI-compatible API, e.g. DeepSeek). Used if Gemini fails.
+LLM2_KEY = os.environ.get("LLM2_API_KEY", "")
+LLM2_BASE = os.environ.get("LLM2_BASE_URL", "https://api.deepseek.com").rstrip("/")
+LLM2_MODEL = os.environ.get("LLM2_MODEL", "deepseek-chat")
+# true = never publish an un-rewritten short post; wait and retry on the next run instead.
+REQUIRE_REWRITE = os.environ.get("REQUIRE_REWRITE", "true").lower() == "true"
+# If the AI fails, keep retrying inside the same run for up to RETRY_WINDOW_MIN minutes
+# (every RETRY_PAUSE_SEC seconds) and publish the moment it succeeds.
+RETRY_WINDOW_MIN = float(os.environ.get("RETRY_WINDOW_MIN", "4"))
+RETRY_PAUSE_SEC = float(os.environ.get("RETRY_PAUSE_SEC", "60"))
 USE_SOURCE_IMAGE = os.environ.get("USE_SOURCE_IMAGE", "false").lower() == "true"
 FETCH_ARTICLE = os.environ.get("FETCH_ARTICLE", "true").lower() == "true"
 FOOTBALL_ONLY = os.environ.get("FOOTBALL_ONLY", "true").lower() == "true"
-MAX_PER_RUN = int(os.environ.get("MAX_PER_RUN", "3"))
+MAX_PER_RUN = int(os.environ.get("MAX_PER_RUN", "1"))
+MAX_AGE_HOURS = float(os.environ.get("MAX_AGE_HOURS", "6"))
+# Rhythm: one post at most every POST_INTERVAL_MIN minutes, no matter how often the bot runs.
+POST_INTERVAL_MIN = float(os.environ.get("POST_INTERVAL_MIN", "20"))
+# Quiet hours in Kyiv time: no posts from QUIET_FROM (inclusive) to QUIET_TO (exclusive).
+QUIET_FROM = int(os.environ.get("QUIET_FROM", "21"))
+QUIET_TO = int(os.environ.get("QUIET_TO", "8"))
+QUIET_DISCARD = os.environ.get("QUIET_DISCARD", "true").lower() == "true"  # forget night news
 STATE_FILE = Path("posted.json")
 FEEDS_FILE = Path("feeds.txt")
 
@@ -40,6 +59,8 @@ FOOTBALL_WORDS = (
     "нападник", "захисник", "уєфа", "фіфа", "футзал",
 )
 SKIP_WORDS = ("прогноз", "ставк", "букмекер", "бонус", "трансляц", "дивитись онлайн")
+# News whose TITLE contains one of these whole words are never published.
+SKIP_TITLE_RE = re.compile(r"\b(відео|видео)\b", re.IGNORECASE)
 
 
 def local(tag):
@@ -120,6 +141,8 @@ def fetch_feed(url):
 
 
 def is_football(item):
+    if SKIP_TITLE_RE.search(item["title"]):
+        return False
     blob = (item["title"] + " " + to_text(item["summary"])).lower() + " "
     if any(w in blob for w in SKIP_WORDS):
         return False
@@ -148,6 +171,11 @@ def fetch_article(url):
 
 _state = {"cands": None, "good": "", "failed": set()}
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
+TRANSIENT = (429, 500, 502, 503, 504)
+
+
+class RewriteFailed(Exception):
+    pass
 
 
 def list_candidates():
@@ -167,53 +195,87 @@ def list_candidates():
            "omni", "transcribe", "lyria", "antigravity", "research", "customtools")
     cands = [n for n in names if "flash" in n and not any(b in n for b in bad)]
     cands.sort(key=lambda n: ("preview" in n or "exp" in n, "lite" in n, n))
-    print("  Gemini will try these models in order:", ", ".join(cands[:8]) or "none")
     _state["cands"] = cands
     return cands
 
 
 def call_gemini(model, prompt):
-    r = requests.post(
-        f"{GEMINI_API}/models/{model}:generateContent",
-        params={"key": GEMINI_KEY},
-        json={"contents": [{"parts": [{"text": prompt}]}]},
-        timeout=60,
-    )
-    if r.status_code >= 400:
-        print(f"  model {model}: HTTP {r.status_code} {r.text[:300]}")
-        r.raise_for_status()
-    return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    """One model, with retries when Google is overloaded (503) or rate limits (429)."""
+    for attempt, pause in enumerate((0, 4, 10)):
+        if pause:
+            time.sleep(pause)
+        r = requests.post(
+            f"{GEMINI_API}/models/{model}:generateContent",
+            params={"key": GEMINI_KEY},
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=60,
+        )
+        if r.status_code in TRANSIENT and attempt < 2:
+            print(f"  model {model}: HTTP {r.status_code}, retrying...")
+            continue
+        if r.status_code >= 400:
+            print(f"  model {model}: HTTP {r.status_code} {r.text[:200]}")
+            r.raise_for_status()
+        return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
 def ask_gemini(prompt):
-    """Tries the working model first, then others. Returns text or raises."""
-    if _state["good"]:
-        return call_gemini(_state["good"], prompt)
-    order = [GEMINI_MODEL] + [m for m in list_candidates() if m != GEMINI_MODEL]
-    tried = 0
+    """Tries the last working model first, then the others. Raises if none answers."""
+    order, tried_models = [], set()
+    for m in [_state["good"], GEMINI_MODEL] + list_candidates():
+        if m and m not in tried_models:
+            tried_models.add(m)
+            order.append(m)
+    attempts = 0
     for model in order:
         if model in _state["failed"]:
             continue
-        if tried >= 8:
+        if attempts >= 6:
             break
-        tried += 1
+        attempts += 1
         try:
             out = call_gemini(model, prompt)
-            _state["good"] = model
-            print("  Gemini model that works:", model)
+            if _state["good"] != model:
+                print("  Gemini model that works:", model)
+                _state["good"] = model
             return out
         except requests.HTTPError as e:
             code = e.response.status_code if e.response is not None else 0
             if code in (404, 400):
-                _state["failed"].add(model)
-                continue  # try the next model
-            raise
+                _state["failed"].add(model)  # permanently unusable for this key
+        except requests.RequestException as e:
+            print(f"  model {model}: {e}")
     raise RuntimeError("no Gemini model answered")
 
 
+def ask_llm2(prompt):
+    """Second AI via an OpenAI-compatible API (DeepSeek by default)."""
+    for attempt, pause in enumerate((0, 5)):
+        if pause:
+            time.sleep(pause)
+        r = requests.post(
+            f"{LLM2_BASE}/chat/completions",
+            headers={"Authorization": f"Bearer {LLM2_KEY}"},
+            json={"model": LLM2_MODEL, "messages": [{"role": "user", "content": prompt}]},
+            timeout=90,
+        )
+        if r.status_code in TRANSIENT and attempt < 1:
+            print(f"  second AI: HTTP {r.status_code}, retrying...")
+            continue
+        if r.status_code >= 400:
+            print(f"  second AI: HTTP {r.status_code} {r.text[:200]}")
+            r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"].strip()
+
+
 def rewrite(title, text):
-    """Returns (headline, body). Uses Gemini if a key is set."""
+    """Returns (headline, body). Raises RewriteFailed if AI is configured but all failed."""
+    engines = []
     if GEMINI_KEY:
+        engines.append(("Gemini", ask_gemini))
+    if LLM2_KEY:
+        engines.append(("Second AI", ask_llm2))
+    if engines:
         prompt = (
             "Ти редактор українського футбольного Telegram-каналу «football 90+». "
             "Перепиши новину своїми словами українською: 350-600 символів, "
@@ -223,14 +285,18 @@ def rewrite(title, text):
             "на початку, далі порожній рядок і текст.\n\n"
             f"Заголовок: {title}\n\nТекст:\n{text}"
         )
-        try:
-            out = ask_gemini(prompt)
-            head, _, body = out.partition("\n")
-            head, body = head.strip().strip("*#").strip(), body.strip()
-            if head and body:
-                return head, body
-        except Exception as e:
-            print("  Gemini failed:", e)
+        for name, fn in engines:
+            try:
+                out = fn(prompt)
+                head, _, body = out.partition("\n")
+                head, body = head.strip().strip("*#").strip(), body.strip()
+                if head and body:
+                    return head, body
+                print(f"  {name}: answer in unexpected format")
+            except Exception as e:
+                print(f"  {name} failed:", e)
+        if REQUIRE_REWRITE:
+            raise RewriteFailed("all AI engines failed")
     return "⚽ " + title, text[:500]
 
 
@@ -267,6 +333,23 @@ def send(caption, image):
     r.raise_for_status()
 
 
+def now_ts():
+    return time.time()
+
+
+def kyiv_hour():
+    return datetime.now(ZoneInfo("Europe/Kyiv")).hour
+
+
+def in_quiet_hours():
+    h = kyiv_hour()
+    if QUIET_FROM == QUIET_TO:
+        return False
+    if QUIET_FROM < QUIET_TO:
+        return QUIET_FROM <= h < QUIET_TO
+    return h >= QUIET_FROM or h < QUIET_TO
+
+
 def load_feeds():
     urls = []
     if FEEDS_FILE.exists():
@@ -287,13 +370,15 @@ def load_state():
     return data
 
 
-def save_state(seen, feeds):
-    STATE_FILE.write_text(json.dumps({"seen": list(seen)[-1500:], "feeds": sorted(feeds)}))
+def save_state(seen, feeds, last_post=0):
+    STATE_FILE.write_text(json.dumps(
+        {"seen": list(seen)[-1500:], "feeds": sorted(feeds), "last_post": last_post}))
 
 
 def main():
     if "TELEGRAM_BOT_TOKEN" not in os.environ:
         sys.exit("TELEGRAM_BOT_TOKEN is not set")
+    run_start = now_ts()
     feeds = load_feeds()
     if not feeds:
         sys.exit("feeds.txt has no feed URLs")
@@ -304,6 +389,7 @@ def main():
     seen = list(state["seen"])
     seen_set = set(seen)
     known_feeds = set(state["feeds"])
+    last_post = float(state.get("last_post", 0))
 
     ok_feeds, candidates = 0, []
     for url in feeds:
@@ -329,10 +415,36 @@ def main():
         sys.exit("No feed could be read - run 'Check feeds' to see which ones work.")
 
     candidates.sort(key=lambda c: c[1]["ts"])
-    for k, _ in candidates[:-MAX_PER_RUN] if len(candidates) > MAX_PER_RUN else []:
-        seen.append(k); seen_set.add(k)  # too old to post, just remember
 
-    for k, it in candidates[-MAX_PER_RUN:]:
+    if in_quiet_hours():
+        if QUIET_DISCARD:  # night news are forgotten, the morning starts fresh
+            for k, _ in candidates:
+                seen.append(k); seen_set.add(k)
+        print(f"Quiet hours ({QUIET_FROM}:00-{QUIET_TO}:00 Kyiv): not posting.")
+        save_state(seen, known_feeds, last_post)
+        return
+
+    # Oldest first, so the channel keeps chronological order. Items that did not
+    # fit into this run stay in the queue; items older than MAX_AGE_HOURS are dropped.
+    now = now_ts()
+    queue = []
+    for k, it in candidates:
+        if it["ts"] and now - it["ts"] > MAX_AGE_HOURS * 3600:
+            seen.append(k); seen_set.add(k)  # too old, skip for good
+        else:
+            queue.append((k, it))
+    print(f"Queue: {len(queue)} item(s) waiting")
+
+    wait = POST_INTERVAL_MIN * 60 - 150 - (now - last_post)  # 150 s grace for run jitter
+    if queue and wait > 0:
+        print(f"Not due yet: next post in about {int(wait // 60) + 1} min.")
+        queue = []
+
+    posted_now, attempts = 0, 0
+    for k, it in queue:
+        if posted_now >= MAX_PER_RUN or attempts >= MAX_PER_RUN + 2:
+            break
+        attempts += 1
         print("Posting:", it["title"])
         try:
             text = to_text(it["content"]) or to_text(it["summary"])
@@ -342,13 +454,28 @@ def main():
                 if len(full) > len(text):
                     text = full
                 image = image or og
-            head, body = rewrite(it["title"], text or it["title"])
+            while True:  # retry the AI until it works or the retry window is over
+                try:
+                    head, body = rewrite(it["title"], text or it["title"])
+                    break
+                except RewriteFailed:
+                    left = RETRY_WINDOW_MIN * 60 - (now_ts() - run_start)
+                    if left <= RETRY_PAUSE_SEC:
+                        raise
+                    print(f"  AI unavailable, trying again in {RETRY_PAUSE_SEC:.0f} s "
+                          f"({left / 60:.1f} min of retry window left)")
+                    time.sleep(RETRY_PAUSE_SEC)
             send(build_caption(head, body), image if USE_SOURCE_IMAGE else "")
             seen.append(k); seen_set.add(k)
+            last_post = now_ts()
+            posted_now += 1
+        except RewriteFailed:
+            print("  AI unavailable - nothing posted, will retry on the next run.")
+            break
         except Exception as e:
             print("  failed, will retry next run:", e)
 
-    save_state(seen, known_feeds)
+    save_state(seen, known_feeds, last_post)
     print("Done.")
 
 
