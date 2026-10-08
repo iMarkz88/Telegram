@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 
 CHANNEL = os.environ.get("TELEGRAM_CHANNEL", "@football_90_pluss")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 # Optional backup AIs (any OpenAI-compatible API): LLM2_* and LLM3_*. Used in this order
 # if Gemini fails. Example defaults: LLM2 = GitHub Models, LLM3 = DeepSeek.
 LLM_DEFAULTS = {
@@ -30,6 +30,8 @@ REQUIRE_REWRITE = os.environ.get("REQUIRE_REWRITE", "true").lower() == "true"
 # (every RETRY_PAUSE_SEC seconds) and publish the moment it succeeds.
 RETRY_WINDOW_MIN = float(os.environ.get("RETRY_WINDOW_MIN", "4"))
 RETRY_PAUSE_SEC = float(os.environ.get("RETRY_PAUSE_SEC", "60"))
+# Safety limit for one run: no new item is started after this many minutes.
+RUN_BUDGET_MIN = float(os.environ.get("RUN_BUDGET_MIN", "10"))
 USE_SOURCE_IMAGE = os.environ.get("USE_SOURCE_IMAGE", "false").lower() == "true"
 FETCH_ARTICLE = os.environ.get("FETCH_ARTICLE", "true").lower() == "true"
 FOOTBALL_ONLY = os.environ.get("FOOTBALL_ONLY", "true").lower() == "true"
@@ -211,7 +213,7 @@ def call_gemini(model, prompt):
             f"{GEMINI_API}/models/{model}:generateContent",
             params={"key": GEMINI_KEY},
             json={"contents": [{"parts": [{"text": prompt}]}]},
-            timeout=60,
+            timeout=45,
         )
         if r.status_code in TRANSIENT and attempt < 2:
             print(f"  model {model}: HTTP {r.status_code}, retrying...")
@@ -455,12 +457,19 @@ def main():
         print(f"Not due yet: next post in about {int(wait // 60) + 1} min.")
         queue = []
 
-    posted_now, attempts = 0, 0
+    # Work through the queue: every item gets its own retry window. An item that cannot be
+    # processed now stays in the queue and the next one is tried; each finished item is
+    # published immediately.
+    posted_now, attempts, failed_in_row = 0, 0, 0
     for k, it in queue:
-        if posted_now >= MAX_PER_RUN or attempts >= MAX_PER_RUN + 2:
+        if posted_now >= MAX_PER_RUN or attempts >= MAX_PER_RUN + 4:
+            break
+        if now_ts() - run_start > RUN_BUDGET_MIN * 60:
+            print("Run time budget used up - the rest follows on the next run.")
             break
         attempts += 1
-        print("Posting:", it["title"])
+        item_start = now_ts()
+        print("Processing:", it["title"])
         try:
             text = to_text(it["content"]) or to_text(it["summary"])
             image = it["image"]
@@ -469,12 +478,12 @@ def main():
                 if len(full) > len(text):
                     text = full
                 image = image or og
-            while True:  # retry the AI until it works or the retry window is over
+            while True:  # retry the AI until it works or this item's retry window is over
                 try:
                     head, body = rewrite(it["title"], text or it["title"])
                     break
                 except RewriteFailed:
-                    left = RETRY_WINDOW_MIN * 60 - (now_ts() - run_start)
+                    left = RETRY_WINDOW_MIN * 60 - (now_ts() - item_start)
                     if left <= RETRY_PAUSE_SEC:
                         raise
                     print(f"  AI unavailable, trying again in {RETRY_PAUSE_SEC:.0f} s "
@@ -484,9 +493,16 @@ def main():
             seen.append(k); seen_set.add(k)
             last_post = now_ts()
             posted_now += 1
+            failed_in_row = 0
+            print("  Published.")
+            if posted_now < MAX_PER_RUN:
+                time.sleep(2)  # be gentle with Telegram between posts
         except RewriteFailed:
-            print("  AI unavailable - nothing posted, will retry on the next run.")
-            break
+            failed_in_row += 1
+            print("  Could not be processed now - it stays in the queue, trying the next one.")
+            if failed_in_row >= 2:
+                print("  The AI seems to be down - stopping, will try again on the next run.")
+                break
         except Exception as e:
             print("  failed, will retry next run:", e)
 

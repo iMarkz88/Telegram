@@ -12,7 +12,7 @@ import random
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -24,6 +24,7 @@ CHANNEL = os.environ.get("TELEGRAM_CHANNEL", "@football_90_pluss")
 QUIZ_TIME = os.environ.get("QUIZ_TIME", "19:30")          # Kyiv time, "HH:MM"
 QUIZZES_PER_DAY = int(os.environ.get("QUIZZES_PER_DAY", "6"))
 PAUSE_BETWEEN_SEC = float(os.environ.get("QUIZ_PAUSE_SEC", "3"))
+HISTORY_KEEP_DAYS = int(os.environ.get("HISTORY_KEEP_DAYS", "0"))  # 0 = keep every question forever
 STATE_FILE = Path("quiz_state.json")        # today's counter + prepared (ready) quizzes
 HISTORY_FILE = Path("quiz_history.jsonl")   # every question ever accepted, one JSON per line
 
@@ -55,20 +56,36 @@ LEVELS = ["легке", "середнє", "складне"]
 
 # ---------------------------------------------------------------- AI
 
-def ask_ai(prompt):
-    """Runs the same AI chain as the news bot (Gemini -> backups). Raises RewriteFailed."""
+def ask_ai(prompt, prefer_not=None):
+    """Runs the AI chain (Gemini -> backups). Returns (text, engine_name).
+    prefer_not: try the other engines first (used for independent fact checking)."""
     engines = []
     if pn.GEMINI_KEY:
         engines.append(("Gemini", pn.ask_gemini))
     for n in ("LLM2", "LLM3"):
         if os.environ.get(f"{n}_API_KEY"):
             engines.append((n, lambda p, n=n: pn.ask_openai_compat(n, p)))
+    if prefer_not:
+        engines.sort(key=lambda e: e[0] == prefer_not)  # stable: the others go first
     for name, fn in engines:
         try:
-            return fn(prompt)
+            return fn(prompt), name
         except Exception as e:
             print(f"  {name} failed:", e)
     raise pn.RewriteFailed("all AI engines failed")
+
+
+def ai_call(prompt, run_start, prefer_not=None):
+    """ask_ai with waiting and retrying inside the retry window. None if unavailable."""
+    while True:
+        try:
+            return ask_ai(prompt, prefer_not)
+        except pn.RewriteFailed:
+            left = pn.RETRY_WINDOW_MIN * 60 - (time.time() - run_start)
+            if left <= pn.RETRY_PAUSE_SEC:
+                return None
+            print(f"  AI unavailable, trying again in {pn.RETRY_PAUSE_SEC:.0f} s")
+            time.sleep(pn.RETRY_PAUSE_SEC)
 
 
 # ---------------------------------------------------------------- text helpers
@@ -100,6 +117,22 @@ def load_history():
                 except ValueError:
                     pass
     return items
+
+
+def prune_history(items, today):
+    """Optional cleanup (off by default): drops questions older than HISTORY_KEEP_DAYS."""
+    if HISTORY_KEEP_DAYS <= 0:
+        return items
+    cutoff = (date.fromisoformat(today) - timedelta(days=HISTORY_KEEP_DAYS)).isoformat()
+    kept = [i for i in items if not i.get("d") or i["d"] >= cutoff]  # undated = keep
+    if len(kept) != len(items):
+        tmp = HISTORY_FILE.with_suffix(".tmp")
+        tmp.write_text("".join(json.dumps(i, ensure_ascii=False) + "\n" for i in kept),
+                       encoding="utf-8")
+        tmp.replace(HISTORY_FILE)
+        print(f"History: removed {len(items) - len(kept)} question(s) older than "
+              f"{HISTORY_KEEP_DAYS} days.")
+    return kept
 
 
 def append_history(entry):
@@ -171,12 +204,18 @@ def build_prompt(history):
         "Придумай ОДНЕ питання для вікторини.\n"
         f"Тема: {random.choice(TOPICS)}. Акцент: {random.choice(ANGLES)}. "
         f"Тип питання: {random.choice(QUESTION_TYPES)} Складність: {random.choice(LEVELS)}.\n"
-        "Вимоги:\n"
-        "- питання має однозначну, загальновідому, перевірювану відповідь; "
-        "якщо ти не впевнений у факті на 100%, обери інше питання;\n"
-        "- не питай про події останніх двох років, про статистику, що змінюється, "
-        "і про поточні рекорди;\n"
-        "- одна правильна відповідь і три хибні, але правдоподібні;\n"
+        "Вимоги (дуже важливо, питання публікується для тисяч людей):\n"
+        "- тільки ДОВЕДЕНІ, задокументовані факти, які легко перевірити в офіційних джерелах "
+        "(ФІФА, УЄФА, офіційні сайти клубів і ліг, енциклопедії): переможці турнірів, роки й місця "
+        "проведення, фіналісти, офіційні назви, правила, склади й результати відомих матчів;\n"
+        "- ніяких суб'єктивних оцінок («найкращий», «наймогутніший», «найвідоміший»), "
+        "прогнозів, думок, чуток, легенд і спірних тверджень;\n"
+        "- точні числа (кількість голів, рік, рахунок) лише якщо ти на 100% їх знаєш; "
+        "суми трансферів, відвідуваність і неоднозначну статистику не використовуй;\n"
+        "- не питай про події останніх двох років і про поточні сезони;\n"
+        "- питання має РІВНО одну правильну відповідь, без двозначності;\n"
+        "- якщо ти хоч трохи не впевнений у факті, обери інше питання;\n"
+        "- три хибні відповіді правдоподібні, але однозначно хибні;\n"
         "- мова: українська; питання до 250 символів, кожна відповідь до 90 символів;\n"
         "- пояснення (1-2 речення, до 180 символів) коротко підтверджує правильну відповідь.\n"
         f"Не повторюй і не перефразовуй питання, що вже були:\n{examples}\n\n"
@@ -186,29 +225,65 @@ def build_prompt(history):
     )
 
 
+def check_facts(quiz, author, run_start):
+    """Asks ANOTHER AI to fact-check the quiz. True = confirmed, False = rejected,
+    None = no checker available right now."""
+    letters = "ABCD"
+    opts = "\n".join(f"{letters[i]}) {o}" for i, o in enumerate(quiz["options"]))
+    prompt = (
+        "Ти суворий фактчекер футбольної історії та статистики. Перевір вікторину.\n"
+        f"Питання: {quiz['question']}\n{opts}\n"
+        f"Вказана правильна відповідь: {letters[quiz['correct_id']]}) "
+        f"{quiz['options'][quiz['correct_id']]}\n"
+        f"Пояснення: {quiz['explanation']}\n\n"
+        "Перевір: 1) чи вказана відповідь фактично правильна за задокументованими даними "
+        "(ФІФА, УЄФА, офіційні джерела); 2) чи кожна з трьох інших відповідей однозначно хибна; "
+        "3) чи питання однозначне й без суб'єктивних оцінок. "
+        "Якщо є хоч найменший сумнів, вердикт «unsure».\n"
+        'Відповідай ЛИШЕ JSON: {"verdict": "ok" | "wrong" | "unsure", "reason": "коротко"}'
+    )
+    res = ai_call(prompt, run_start, prefer_not=author)
+    if res is None:
+        return None
+    raw, checker = res
+    try:
+        m = re.search(r"\{.*\}", raw, re.S)
+        data = json.loads(m.group(0))
+        verdict = str(data.get("verdict", "")).strip().lower()
+        print(f"  fact check by {checker}: {verdict} {data.get('reason', '')[:120]}")
+        return verdict == "ok"
+    except Exception:
+        print(f"  fact check by {checker}: unreadable answer, treated as not confirmed")
+        return False
+
+
 def make_quiz(history, run_start):
-    """Returns a new, non-repeating quiz, or None if it could not be made in this run."""
+    """Returns a new, non-repeating, fact-checked quiz, or None if not possible in this run."""
     bad = 0
     while True:
-        try:
-            raw = ask_ai(build_prompt(history))
-        except pn.RewriteFailed:
-            left = pn.RETRY_WINDOW_MIN * 60 - (time.time() - run_start)
-            if left <= pn.RETRY_PAUSE_SEC:
-                return None
-            print(f"  AI unavailable, trying again in {pn.RETRY_PAUSE_SEC:.0f} s")
-            time.sleep(pn.RETRY_PAUSE_SEC)
-            continue
+        res = ai_call(build_prompt(history), run_start)
+        if res is None:
+            return None
+        raw, author = res
         try:
             quiz = parse_quiz(raw)
             if history.is_repeat(quiz["question"], quiz["options"][quiz["correct_id"]]):
                 raise ValueError("repeat of an earlier question")
-            return quiz
         except Exception as e:
             bad += 1
             print(f"  unusable quiz ({e}), attempt {bad}")
-            if bad >= 5:
+            if bad >= 6:
                 return None
+            continue
+        verdict = check_facts(quiz, author, run_start)
+        if verdict is None:
+            return None
+        if verdict:
+            return quiz
+        bad += 1
+        print(f"  quiz rejected by the fact check, attempt {bad}")
+        if bad >= 6:
+            return None
 
 
 # ---------------------------------------------------------------- sending
@@ -271,7 +346,7 @@ def main():
     today = now.date().isoformat()
     if state["day"] != today:  # new day: counter restarts, unused ready quizzes are kept
         state["day"], state["posted"] = today, 0
-    history = History(load_history())
+    history = History(prune_history(load_history(), today))
 
     def prepare_one():
         quiz = make_quiz(history, run_start)
