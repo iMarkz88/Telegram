@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  models: read
 
 concurrency:
   group: post-news
@@ -30,7 +31,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
+          LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
+          LLM2_MODEL: "openai/gpt-4o-mini"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           USE_SOURCE_IMAGE: "true"
           MAX_PER_RUN: "1"
