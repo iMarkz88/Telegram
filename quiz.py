@@ -1,7 +1,10 @@
-"""Daily football quiz for a Telegram channel (quiz poll: 4 options, exactly 1 correct).
+"""Daily football quizzes for a Telegram channel (quiz polls: 4 options, exactly 1 correct).
 
-Runs together with post_news.py every few minutes, but publishes only once per day,
-after QUIZ_TIME (Kyiv time) and never during quiet hours.
+How it works (runs together with post_news.py every few minutes):
+  * Before QUIZ_TIME (Kyiv time) it prepares ONE quiz per run until QUIZZES_PER_DAY are ready.
+  * At QUIZ_TIME it publishes all ready quizzes one after another.
+  * Every accepted question is appended to quiz_history.jsonl and never used again;
+    new questions are compared with the whole history (exact and similar wording).
 """
 import json
 import os
@@ -18,21 +21,39 @@ import requests
 import post_news as pn
 
 CHANNEL = os.environ.get("TELEGRAM_CHANNEL", "@football_90_pluss")
-QUIZ_TIME = os.environ.get("QUIZ_TIME", "18:00")  # Kyiv time, "HH:MM"
-QUIZ_COUNT = int(os.environ.get("QUIZ_COUNT", "1"))  # quizzes published in a row each day
-PAUSE_BETWEEN_SEC = 3
-STATE_FILE = Path("quiz_state.json")
+QUIZ_TIME = os.environ.get("QUIZ_TIME", "19:30")          # Kyiv time, "HH:MM"
+QUIZZES_PER_DAY = int(os.environ.get("QUIZZES_PER_DAY", "6"))
+PAUSE_BETWEEN_SEC = float(os.environ.get("QUIZ_PAUSE_SEC", "3"))
+STATE_FILE = Path("quiz_state.json")        # today's counter + prepared (ready) quizzes
+HISTORY_FILE = Path("quiz_history.jsonl")   # every question ever accepted, one JSON per line
 
 TOPICS = [
     "історія чемпіонатів світу", "чемпіонати Європи", "Ліга чемпіонів УЄФА",
-    "Динамо Київ та Шахтар в єврокубках", "збірна України в історії",
-    "легенди світового футболу", "правила футболу", "відомі стадіони світу",
-    "легендарні тренери", "футбольні рекорди та цікаві факти", "Золотий м'яч",
-    "відомі трансфери минулих років", "англійська Прем'єр-ліга: історія",
-    "Ла Ліга та Серія А: історія", "футбольні терміни та походження гри",
-    "українські футболісти за кордоном", "клубні чемпіонати: легендарні сезони",
+    "Ліга Європи та Кубок УЄФА", "Динамо Київ та Шахтар в єврокубках",
+    "збірна України в історії", "легенди світового футболу", "правила футболу",
+    "відомі стадіони світу", "легендарні тренери", "футбольні рекорди та цікаві факти",
+    "Золотий м'яч", "відомі трансфери минулих років", "англійська Прем'єр-ліга: історія",
+    "Ла Ліга та Серія А: історія", "Бундесліга та Ліга 1: історія",
+    "футбольні терміни та походження гри", "українські футболісти за кордоном",
+    "чемпіонат України: історія", "кубки національних ліг", "воротарі в історії футболу",
+    "бомбардири та рекорди голів", "знамениті дербі та суперництва", "емблеми, форма й прізвиська клубів",
 ]
+ANGLES = (
+    ["1930-ті", "1950-ті", "1960-ті", "1970-ті", "1980-ті", "1990-ті", "2000-ні", "2010-ті"]
+    + ["Бразилія", "Аргентина", "Німеччина", "Італія", "Іспанія", "Франція", "Англія", "Нідерланди",
+       "Португалія", "Уругвай", "Хорватія", "Бельгія", "Україна", "Польща", "Туреччина", "Шотландія",
+       "Мексика", "США", "Японія", "Південна Корея", "Нігерія", "Камерун", "Сенегал", "Марокко",
+       "Греція", "Данія", "Швеція", "Чехія", "Румунія", "Сербія", "Ірландія", "Колумбія"]
+    + ["Барселона", "Реал Мадрид", "Манчестер Юнайтед", "Ліверпуль", "Арсенал", "Челсі", "Баварія",
+       "Ювентус", "Мілан", "Інтер", "Аякс", "Бенфіка", "Порту", "ПСЖ", "Боруссія Дортмунд",
+       "Динамо Київ", "Шахтар", "Дніпро", "Зоря", "Металіст", "Карпати", "Атлетіко", "Ліон", "Селтік"]
+    + ["воротарі", "захисники", "півзахисники", "нападники", "тренери", "арбітри", "капітани", "стадіони"]
+)
+QUESTION_TYPES = ["Хто?", "Коли?", "Де?", "Скільки?", "Який клуб?", "Яка країна?", "Який рік?", "Що означає?"]
+LEVELS = ["легке", "середнє", "складне"]
 
+
+# ---------------------------------------------------------------- AI
 
 def ask_ai(prompt):
     """Runs the same AI chain as the news bot (Gemini -> backups). Raises RewriteFailed."""
@@ -50,6 +71,8 @@ def ask_ai(prompt):
     raise pn.RewriteFailed("all AI engines failed")
 
 
+# ---------------------------------------------------------------- text helpers
+
 def clean(text):
     text = re.sub(r"https?://\S+", "", str(text))
     text = text.replace("*", "").replace("`", "")
@@ -59,6 +82,62 @@ def clean(text):
 def norm(text):
     return re.sub(r"[^\w]+", " ", text.lower()).strip()
 
+
+def tokens(text):
+    return {w for w in norm(text).split() if len(w) > 2}
+
+
+# ---------------------------------------------------------------- history (never repeat)
+
+def load_history():
+    items = []
+    if HISTORY_FILE.exists():
+        for line in HISTORY_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    items.append(json.loads(line))
+                except ValueError:
+                    pass
+    return items
+
+
+def append_history(entry):
+    with open(HISTORY_FILE, "a", encoding="utf-8") as f:  # append-only keeps git history small
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+class History:
+    def __init__(self, items):
+        self.items = items
+        self.exact = {norm(i["q"]) for i in items}
+        self.rows = [(tokens(i["q"]), norm(i.get("a", ""))) for i in items]
+
+    def is_repeat(self, question, answer):
+        if norm(question) in self.exact:
+            return True
+        t, a = tokens(question), norm(answer)
+        for tt, aa in self.rows:
+            sim = len(t & tt) / max(1, len(t | tt))
+            if sim >= 0.75 or (sim >= 0.5 and a and a == aa):  # reworded copy / same answer
+                return True
+        return False
+
+    def add(self, question, answer, day):
+        entry = {"d": day, "q": question, "a": answer}
+        self.items.append(entry)
+        self.exact.add(norm(question))
+        self.rows.append((tokens(question), norm(answer)))
+        append_history(entry)
+
+    def examples_for_prompt(self):
+        qs = [i["q"] for i in self.items]
+        recent, older = qs[-25:], qs[:-25]
+        sample = random.sample(older, min(25, len(older)))
+        return sample + recent
+
+
+# ---------------------------------------------------------------- generating
 
 def parse_quiz(raw):
     """Parses the AI answer, validates it, shuffles the options."""
@@ -85,11 +164,13 @@ def parse_quiz(raw):
             "correct_id": options.index(correct), "explanation": explanation}
 
 
-def build_prompt(topic, history):
-    recent = "\n".join(f"- {q}" for q in history[-40:]) or "(поки немає)"
+def build_prompt(history):
+    examples = "\n".join(f"- {q}" for q in history.examples_for_prompt()) or "(поки немає)"
     return (
         "Ти редактор українського футбольного Telegram-каналу «football 90+». "
-        f"Придумай ОДНЕ питання для вікторини на тему: {topic}.\n"
+        "Придумай ОДНЕ питання для вікторини.\n"
+        f"Тема: {random.choice(TOPICS)}. Акцент: {random.choice(ANGLES)}. "
+        f"Тип питання: {random.choice(QUESTION_TYPES)} Складність: {random.choice(LEVELS)}.\n"
         "Вимоги:\n"
         "- питання має однозначну, загальновідому, перевірювану відповідь; "
         "якщо ти не впевнений у факті на 100%, обери інше питання;\n"
@@ -98,24 +179,19 @@ def build_prompt(topic, history):
         "- одна правильна відповідь і три хибні, але правдоподібні;\n"
         "- мова: українська; питання до 250 символів, кожна відповідь до 90 символів;\n"
         "- пояснення (1-2 речення, до 180 символів) коротко підтверджує правильну відповідь.\n"
-        f"Не повторюй питання, що вже були:\n{recent}\n\n"
+        f"Не повторюй і не перефразовуй питання, що вже були:\n{examples}\n\n"
         "Відповідай ЛИШЕ JSON без жодного іншого тексту, у такому форматі:\n"
         '{"question": "...", "correct_answer": "...", '
         '"wrong_answers": ["...", "...", "..."], "explanation": "..."}'
     )
 
 
-def make_quiz(history, run_start, used_topics=None):
-    """Returns a quiz dict, or None if the AI is unavailable for the whole retry window."""
-    used_topics = used_topics if used_topics is not None else []
-    seen = {norm(q) for q in history}
-    bad_format = 0
+def make_quiz(history, run_start):
+    """Returns a new, non-repeating quiz, or None if it could not be made in this run."""
+    bad = 0
     while True:
-        free = [t for t in TOPICS if t not in used_topics] or TOPICS
-        topic = random.choice(free)
-        prompt = build_prompt(topic, history)
         try:
-            raw = ask_ai(prompt)
+            raw = ask_ai(build_prompt(history))
         except pn.RewriteFailed:
             left = pn.RETRY_WINDOW_MIN * 60 - (time.time() - run_start)
             if left <= pn.RETRY_PAUSE_SEC:
@@ -125,49 +201,63 @@ def make_quiz(history, run_start, used_topics=None):
             continue
         try:
             quiz = parse_quiz(raw)
-            if norm(quiz["question"]) in seen:
-                raise ValueError("this question was already used")
-            used_topics.append(topic)
+            if history.is_repeat(quiz["question"], quiz["options"][quiz["correct_id"]]):
+                raise ValueError("repeat of an earlier question")
             return quiz
         except Exception as e:
-            bad_format += 1
-            print(f"  unusable quiz ({e}), attempt {bad_format}")
-            if bad_format >= 4:
+            bad += 1
+            print(f"  unusable quiz ({e}), attempt {bad}")
+            if bad >= 5:
                 return None
 
 
-def send_quiz(quiz):
-    r = requests.post(
-        f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendPoll",
-        json={
-            "chat_id": CHANNEL,
-            "question": quiz["question"],
-            "options": [{"text": o} for o in quiz["options"]],
-            "type": "quiz",
-            "correct_option_id": quiz["correct_id"],
-            "explanation": quiz["explanation"],
-            "is_anonymous": True,  # channels only allow anonymous polls
-        },
-        timeout=60,
-    )
-    if not r.ok:
-        print("  Telegram refused the quiz:", r.text[:300])
-        r.raise_for_status()
+# ---------------------------------------------------------------- sending
 
+def send_quiz(quiz):
+    """Publishes one quiz poll. Returns True on success, False if Telegram rejects this quiz."""
+    url = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendPoll"
+    body = {
+        "chat_id": CHANNEL,
+        "question": quiz["question"],
+        "options": [{"text": o} for o in quiz["options"]],
+        "type": "quiz",
+        "correct_option_id": quiz["correct_id"],
+        "explanation": quiz["explanation"],
+        "is_anonymous": True,  # channels only allow anonymous polls
+    }
+    for attempt in range(2):
+        r = requests.post(url, json=body, timeout=60)
+        if r.status_code == 429 and attempt == 0:  # flood control: wait as Telegram asks
+            try:
+                wait = int(r.json().get("parameters", {}).get("retry_after", 10))
+            except Exception:
+                wait = 10
+            print(f"  Telegram asks to wait {wait} s")
+            time.sleep(min(wait, 30))
+            continue
+        if r.ok:
+            return True
+        print("  Telegram refused the quiz:", r.text[:300])
+        if r.status_code == 400:
+            return False  # this particular quiz is invalid, drop it
+        r.raise_for_status()
+    raise RuntimeError("could not send the quiz")
+
+
+# ---------------------------------------------------------------- state
 
 def load_state():
+    state = {"day": "", "posted": 0, "ready": []}
     if STATE_FILE.exists():
-        data = json.loads(STATE_FILE.read_text())
-    else:
-        data = {}
-    data.setdefault("last_date", "")
-    data.setdefault("progress", {"date": "", "count": 0})
-    data.setdefault("history", [])
-    return data
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        state.update({k: data[k] for k in ("day", "posted", "ready") if k in data})
+        for q in data.get("history", []):  # migrate the very first file format
+            append_history({"d": "", "q": q, "a": ""})
+    return state
 
 
 def save_state(state):
-    STATE_FILE.write_text(json.dumps(state, ensure_ascii=False))
+    STATE_FILE.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
 
 def main():
@@ -179,39 +269,64 @@ def main():
     state = load_state()
     now = datetime.now(ZoneInfo("Europe/Kyiv"))
     today = now.date().isoformat()
+    if state["day"] != today:  # new day: counter restarts, unused ready quizzes are kept
+        state["day"], state["posted"] = today, 0
+    history = History(load_history())
 
-    done_today = state["progress"]["count"] if state["progress"]["date"] == today else 0
-    if not manual_test:
-        if state["last_date"] == today or done_today >= QUIZ_COUNT:
-            print("Quiz: today's quizzes are already published.")
-            return
-        if now.hour * 60 + now.minute < pn.to_minutes(QUIZ_TIME):
-            print(f"Quiz: not yet, scheduled for {QUIZ_TIME} Kyiv time.")
-            return
-        if pn.in_quiet_hours():
-            print("Quiz: quiet hours, will not publish.")
-            return
-        to_post = QUIZ_COUNT - done_today
-    else:
-        to_post = QUIZ_COUNT
-
-    used_topics, published = [], 0
-    for i in range(to_post):
-        quiz = make_quiz(state["history"], run_start, used_topics)
+    def prepare_one():
+        quiz = make_quiz(history, run_start)
         if quiz is None:
-            print("Quiz: AI unavailable, the rest will be tried on the next run.")
-            break
-        send_quiz(quiz)
-        published += 1
-        print(f"Quiz {i + 1}/{to_post} published:", quiz["question"])
-        state["history"] = (state["history"] + [quiz["question"]])[-150:]
-        if not manual_test:  # progress is saved after every quiz
-            state["progress"] = {"date": today, "count": done_today + published}
-            if state["progress"]["count"] >= QUIZ_COUNT:
-                state["last_date"] = today
+            return False
+        history.add(quiz["question"], quiz["options"][quiz["correct_id"]], today)
+        state["ready"].append(quiz)
         save_state(state)
-        if i < to_post - 1:
+        print(f"Quiz prepared ({len(state['ready'])} ready): {quiz['question']}")
+        return True
+
+    # ---- manual test: publish exactly one quiz now, does not count for the day
+    if manual_test:
+        if not state["ready"] and not prepare_one():
+            print("Quiz test: AI unavailable.")
+            return
+        quiz = state["ready"].pop(0)
+        if send_quiz(quiz):
+            print("Quiz test published:", quiz["question"])
+        save_state(state)
+        return
+
+    if pn.in_quiet_hours():
+        print("Quiz: quiet hours.")
+        save_state(state)
+        return
+    if state["posted"] >= QUIZZES_PER_DAY:
+        print(f"Quiz: all {QUIZZES_PER_DAY} quizzes already published today.")
+        save_state(state)
+        return
+
+    # ---- before QUIZ_TIME: prepare one quiz per run
+    if now.hour * 60 + now.minute < pn.to_minutes(QUIZ_TIME):
+        need = QUIZZES_PER_DAY - state["posted"] - len(state["ready"])
+        if need <= 0:
+            print(f"Quiz: {len(state['ready'])}/{QUIZZES_PER_DAY} ready, waiting for {QUIZ_TIME}.")
+        elif not prepare_one():
+            print("Quiz: could not prepare one now, will try on the next run.")
+        save_state(state)
+        return
+
+    # ---- QUIZ_TIME reached: publish everything that is ready, one after another
+    while state["posted"] < QUIZZES_PER_DAY:
+        if not state["ready"] and not prepare_one():
+            print("Quiz: AI unavailable, the rest will follow on the next run.")
+            break
+        quiz = state["ready"].pop(0)
+        sent = send_quiz(quiz)
+        if sent:
+            state["posted"] += 1
+            print(f"Quiz {state['posted']}/{QUIZZES_PER_DAY} published: {quiz['question']}")
+        save_state(state)
+        if sent and state["posted"] < QUIZZES_PER_DAY:
             time.sleep(PAUSE_BETWEEN_SEC)
+    save_state(state)
 
 
 if __name__ == "__main__":
