@@ -18,10 +18,12 @@ from bs4 import BeautifulSoup
 CHANNEL = os.environ.get("TELEGRAM_CHANNEL", "@football_90_pluss")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
-# Optional second AI (any OpenAI-compatible API, e.g. DeepSeek). Used if Gemini fails.
-LLM2_KEY = os.environ.get("LLM2_API_KEY", "")
-LLM2_BASE = os.environ.get("LLM2_BASE_URL", "https://api.deepseek.com").rstrip("/")
-LLM2_MODEL = os.environ.get("LLM2_MODEL", "deepseek-chat")
+# Optional backup AIs (any OpenAI-compatible API): LLM2_* and LLM3_*. Used in this order
+# if Gemini fails. Example defaults: LLM2 = GitHub Models, LLM3 = DeepSeek.
+LLM_DEFAULTS = {
+    "LLM2": ("https://models.github.ai/inference", "openai/gpt-4o-mini"),
+    "LLM3": ("https://api.deepseek.com", "deepseek-chat"),
+}
 # true = never publish an un-rewritten short post; wait and retry on the next run instead.
 REQUIRE_REWRITE = os.environ.get("REQUIRE_REWRITE", "true").lower() == "true"
 # If the AI fails, keep retrying inside the same run for up to RETRY_WINDOW_MIN minutes
@@ -249,22 +251,26 @@ def ask_gemini(prompt):
     raise RuntimeError("no Gemini model answered")
 
 
-def ask_llm2(prompt):
-    """Second AI via an OpenAI-compatible API (DeepSeek by default)."""
+def ask_openai_compat(name, prompt):
+    """Backup AI through an OpenAI-compatible API (GitHub Models, DeepSeek, Groq, ...)."""
+    base_default, model_default = LLM_DEFAULTS[name]
+    base = os.environ.get(f"{name}_BASE_URL", base_default).rstrip("/")
+    model = os.environ.get(f"{name}_MODEL", model_default)
+    key = os.environ[f"{name}_API_KEY"]
     for attempt, pause in enumerate((0, 5)):
         if pause:
             time.sleep(pause)
         r = requests.post(
-            f"{LLM2_BASE}/chat/completions",
-            headers={"Authorization": f"Bearer {LLM2_KEY}"},
-            json={"model": LLM2_MODEL, "messages": [{"role": "user", "content": prompt}]},
+            f"{base}/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={"model": model, "messages": [{"role": "user", "content": prompt}]},
             timeout=90,
         )
         if r.status_code in TRANSIENT and attempt < 1:
-            print(f"  second AI: HTTP {r.status_code}, retrying...")
+            print(f"  {name} ({model}): HTTP {r.status_code}, retrying...")
             continue
         if r.status_code >= 400:
-            print(f"  second AI: HTTP {r.status_code} {r.text[:200]}")
+            print(f"  {name} ({model}): HTTP {r.status_code} {r.text[:200]}")
             r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"].strip()
 
@@ -274,8 +280,9 @@ def rewrite(title, text):
     engines = []
     if GEMINI_KEY:
         engines.append(("Gemini", ask_gemini))
-    if LLM2_KEY:
-        engines.append(("Second AI", ask_llm2))
+    for n in ("LLM2", "LLM3"):
+        if os.environ.get(f"{n}_API_KEY"):
+            engines.append((n, lambda p, n=n: ask_openai_compat(n, p)))
     if engines:
         prompt = (
             "Ти редактор українського футбольного Telegram-каналу «football 90+». "
