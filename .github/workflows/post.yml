@@ -21,7 +21,7 @@ concurrency:
 jobs:
   post:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -36,15 +36,16 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: "gemini-3.5-flash"
           LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
           LLM2_MODEL: "openai/gpt-4o-mini"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           USE_SOURCE_IMAGE: "true"
-          MAX_PER_RUN: "1"
+          MAX_PER_RUN: "3"
           POST_INTERVAL_MIN: "20"
           QUIET_FROM: "21:30"
           QUIET_TO: "07:30"
-          RETRY_WINDOW_MIN: "4"
+          RETRY_WINDOW_MIN: "3"
           RETRY_PAUSE_SEC: "60"
         run: python post_news.py
 
@@ -53,15 +54,17 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: "gemini-3.5-flash"
           LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
           LLM2_MODEL: "openai/gpt-4o-mini"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           QUIZ_TIME: "19:30"
           QUIZZES_PER_DAY: "6"
+          HISTORY_KEEP_DAYS: "730"
           QUIZ_FORCE: ${{ inputs.quiz_now }}
           QUIET_FROM: "21:30"
           QUIET_TO: "07:30"
-          RETRY_WINDOW_MIN: "4"
+          RETRY_WINDOW_MIN: "3"
           RETRY_PAUSE_SEC: "60"
         run: python quiz.py
 
@@ -73,4 +76,19 @@ jobs:
           for f in posted.json quiz_state.json quiz_history.jsonl; do
             if [ -f "$f" ]; then git add "$f"; fi
           done
-          git diff --cached --quiet || (git commit -m "update state" && git push)
+          if git diff --cached --quiet; then
+            echo "nothing to save"
+            exit 0
+          fi
+          git commit -m "update state"
+          for i in 1 2 3 4 5; do
+            if git push; then
+              echo "state saved (attempt $i)"
+              exit 0
+            fi
+            echo "push rejected, syncing and trying again..."
+            git pull --rebase -X theirs || git rebase --abort
+            sleep 3
+          done
+          echo "could not save state"
+          exit 1
