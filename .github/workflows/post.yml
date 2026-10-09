@@ -9,6 +9,10 @@ on:
         description: "Опублікувати одну пробну вікторину зараз (тест)"
         type: boolean
         default: false
+      digest_now:
+        description: "Опублікувати пост «Цього дня» зараз (тест)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -21,7 +25,7 @@ concurrency:
 jobs:
   post:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +36,7 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Run bot
+      - name: Run history digest
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -40,14 +44,14 @@ jobs:
           LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
           LLM2_MODEL: "openai/gpt-4o-mini"
           TELEGRAM_CHANNEL: "@football_90_pluss"
-          USE_SOURCE_IMAGE: "true"
-          MAX_PER_RUN: "3"
-          POST_INTERVAL_MIN: "20"
+          DIGEST_TIME: "09:00"
+          DIGEST_ITEMS: "12"
+          DIGEST_FORCE: ${{ inputs.digest_now }}
           QUIET_FROM: "21:30"
           QUIET_TO: "07:30"
           RETRY_WINDOW_MIN: "3"
           RETRY_PAUSE_SEC: "60"
-        run: python post_news.py
+        run: python history_today.py
 
       - name: Run quiz
         if: ${{ !cancelled() }}
@@ -68,12 +72,30 @@ jobs:
           RETRY_PAUSE_SEC: "60"
         run: python quiz.py
 
+      - name: Run bot
+        if: ${{ !cancelled() }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: "gemini-3.5-flash"
+          LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
+          LLM2_MODEL: "openai/gpt-4o-mini"
+          TELEGRAM_CHANNEL: "@football_90_pluss"
+          USE_SOURCE_IMAGE: "true"
+          MAX_PER_RUN: "1"
+          POST_INTERVAL_MIN: "20"
+          QUIET_FROM: "21:30"
+          QUIET_TO: "07:30"
+          RETRY_WINDOW_MIN: "3"
+          RETRY_PAUSE_SEC: "60"
+        run: python post_news.py
+
       - name: Save state
         if: ${{ !cancelled() }}
         run: |
           git config user.name "news-bot"
           git config user.email "news-bot@users.noreply.github.com"
-          for f in posted.json quiz_state.json quiz_history.jsonl; do
+          for f in posted.json quiz_state.json quiz_history.jsonl digest_state.json; do
             if [ -f "$f" ]; then git add "$f"; fi
           done
           if git diff --cached --quiet; then
