@@ -182,7 +182,8 @@ def numbers(s):
     return set(re.findall(r"\d+", s))
 
 
-def line_ok(item, text):
+    if quiz.has_foreign_cyrillic(text):
+        return False
     src = numbers(f"{item['year']} {item['text']} {item['desc']} {item['name']}")
     if not (12 <= len(text) <= 330) or not numbers(text) <= src:
         return False  # the AI must not introduce any number that is not in the source
