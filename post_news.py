@@ -143,23 +143,22 @@ def parse_feed(xml_bytes):
                 if t.startswith("image") or ch.attrib.get("medium") == "image" \
                    or local(ch.tag) == "thumbnail":
                     d["image"] = d["image"] or ch.attrib["url"]
-      if not d["image"]:
-            m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', d["content"] + d["summary"])
-            if m:
-                d["image"] = html.unescape(m.group(1))
+        if not d["image"]:
+                    m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', d["content"] + d["summary"])
+                    if m:
+                        d["image"] = html.unescape(m.group(1))
+        
+                if d["link"] and d["title"]:
+                    if d["ts"] > 0 and (time.time() - d["ts"]) > 10800:
+                        continue
+                    out.append(d)
+        
+            return out
 
-        if d["link"] and d["title"]:
-            # Пропускаем новости старше 3 часов (10800 секунд)
-            if d["ts"] > 0 and (time.time() - d["ts"]) > 10800:
-                continue
-            out.append(d)
-
-    return out
 def fetch_feed(url):
     r = requests.get(url, headers=HEADERS, timeout=30)
     r.raise_for_status()
     return parse_feed(r.content)
-
 
 def is_football(item):
     if SKIP_TITLE_RE.search(item["title"]):
