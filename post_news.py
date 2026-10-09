@@ -332,7 +332,6 @@ def rewrite(title, text):
         if REQUIRE_REWRITE:
             raise RewriteFailed("all AI engines failed")
     return "⚽ " + title, text[:500]
-)
         for name, fn in engines:
             try:
                 out = fn(prompt)
