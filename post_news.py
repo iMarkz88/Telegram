@@ -332,9 +332,9 @@ def rewrite(title, text):
             except Exception as e:
                 print(f" {name} failed:", e)
 
-        if REQUIRE_REWRITE:
-            raise RewriteFailed("all AI engines failed")
-        return "⚽ " + title, text[:500]
+    if REQUIRE_REWRITE:
+         raise RewriteFailed("all AI engines failed")
+     return "⚽ " + title, text[:500]
 
 def build_caption(head, body, limit=1024):
     head = re.sub(r"https?://\S+", "", head).strip()
