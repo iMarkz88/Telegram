@@ -403,6 +403,20 @@ def main():
             time.sleep(PAUSE_BETWEEN_SEC)
     save_state(state)
 
+def has_foreign_cyrillic(text):
+    """
+    Проверяет, содержит ли текст кириллические символы, 
+    которые не являются украинскими (русские буквы) или 
+    которые являются транслитерацией иностранных названий.
+    Возвращает True, если есть подозрительные символы.
+    """
+    # Русские буквы, которых нет в украинском алфавите
+    russian_chars = set("ыэёъ")
+    # Также можно добавить проверку на другие признаки, но начнем с этого
+    for char in text.lower():
+        if char in russian_chars:
+            return True
+    return False
 
 if __name__ == "__main__":
     main()
