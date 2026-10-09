@@ -403,6 +403,19 @@ def main():
             time.sleep(PAUSE_BETWEEN_SEC)
     save_state(state)
 
+def has_foreign_cyrillic(text: str) -> bool:
+    """Проверяет, нет ли в тексте букв сторонней кириллицы (например, русских ы, ъ, э, ё).
+    Разрешены украинские буквы, латинские буквы, цифры и знаки препинания."""
+    allowed_chars = set(
+        "абвгґдеєжзиіїйклмнопрстуфхцчшщьюя"
+        "АБВГҐДЕЄЖЗИІЇЙКЛМНОПРСТУФХЦЧШЩЬЮЯ"
+        "abcdefghijklmnopqrstuvwxyz"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "0123456789 .,'-—()\"/:"
+    )
+    # Если в тексте есть буква, которая не входит в список разрешённых (например, русская кириллица)
+    return any(char not in allowed_chars for char in text if char.isalpha())
+
 
 if __name__ == "__main__":
     main()
