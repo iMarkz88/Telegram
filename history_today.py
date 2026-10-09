@@ -57,7 +57,7 @@ def people_query(kind, month, day, ukrainian):
     prop = "P569" if kind == "birth" else "P570"
     country = ("{ ?p wdt:P27 wd:Q212 } UNION { ?p wdt:P19 ?bp . ?bp wdt:P17 wd:Q212 }"
                if ukrainian else "")
-    langs = "uk,en" if ukrainian else "en,mul"  # foreigners: international (Latin) names
+    langs = "uk,en" if ukrainian else "en,mul"  # Для украинцев — украинские имена, для иностранцев — латиница
     min_links = 5 if ukrainian else 25
     return f"""
 SELECT ?p ?pLabel ?pDescription ?date ?sl WHERE {{
@@ -66,9 +66,10 @@ SELECT ?p ?pLabel ?pDescription ?date ?sl WHERE {{
   ?p wikibase:sitelinks ?sl .
   FILTER(?sl >= {min_links})
   {country}
-  ?p p:{prop}/psv:{prop} ?node .
-  ?node wikibase:timeValue ?date ; wikibase:timePrecision ?prec .
-  FILTER(?prec = 11 && MONTH(?date) = {month} && DAY(?date) = {day} && YEAR(?date) >= 1860)
+  ?p p:{prop} ?st .
+  ?st psv:{prop} ?node .
+  ?node wikibase:timeValue ?date ; wikibase:timePrecision 11 .
+  FILTER(MONTH(?date) = {month} && DAY(?date) = {day} && YEAR(?date) >= 1860)
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "{langs}". }}
 }}
 ORDER BY DESC(?sl)
