@@ -40,7 +40,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: "gemini-3.5-flash"
+          GEMINI_MODEL: "gemini-1.5-flash"
           LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
           LLM2_MODEL: "openai/gpt-4o-mini"
           TELEGRAM_CHANNEL: "@football_90_pluss"
@@ -58,7 +58,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: "gemini-3.5-flash"
+          GEMINI_MODEL: "gemini-1.5-flash"
           LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
           LLM2_MODEL: "openai/gpt-4o-mini"
           TELEGRAM_CHANNEL: "@football_90_pluss"
@@ -77,7 +77,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: "gemini-3.5-flash"
+          GEMINI_MODEL: "gemini-1.5-flash"
           LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
           LLM2_MODEL: "openai/gpt-4o-mini"
           TELEGRAM_CHANNEL: "@football_90_pluss"
