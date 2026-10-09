@@ -75,7 +75,7 @@ def people_query(kind, month, day, ukrainian):
     country = ("{ ?p wdt:P27 wd:Q212 } UNION { ?p wdt:P19 ?bp . ?bp wdt:P17 wd:Q212 }"
                if ukrainian else "")
     langs = "uk,en" if ukrainian else "en,mul"  # foreigners: international (Latin) names
-    min_links = 5 if ukrainian else 25
+    min_links = 5 if ukrainian else 15
     return f"""
 SELECT ?p ?pLabel ?pDescription ?date ?sl WHERE {{
   VALUES ?occ {{ wd:Q937857 wd:Q628099 }}
