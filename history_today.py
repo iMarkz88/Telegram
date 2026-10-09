@@ -66,10 +66,9 @@ SELECT ?p ?pLabel ?pDescription ?date ?sl WHERE {{
   ?p wikibase:sitelinks ?sl .
   FILTER(?sl >= {min_links})
   {country}
-  ?p p:{prop} ?st .
-  ?st psv:{prop} ?node .
-  ?node wikibase:timeValue ?date ; wikibase:timePrecision 11 .
-  FILTER(MONTH(?date) = {month} && DAY(?date) = {day} && YEAR(?date) >= 1860)
+  ?p p:{prop}/psv:{prop} ?node .
+  ?node wikibase:timeValue ?date ; wikibase:timePrecision ?prec .
+  FILTER(?prec = 11 && MONTH(?date) = {month} && DAY(?date) = {day} && YEAR(?date) >= 1860)
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "{langs}". }}
 }}
 ORDER BY DESC(?sl)
@@ -185,15 +184,20 @@ def numbers(s):
 
 def line_ok(item, text):
     src = numbers(f"{item['year']} {item['text']} {item['desc']} {item['name']}")
-    if not (12 <= len(text) <= 500) or not numbers(text) <= src:
+    if not (12 <= len(text) <= 330) or not numbers(text) <= src:
         return False  # the AI must not introduce any number that is not in the source
+    low = text.lower()
+    if item["kind"] == "birth" and "народив" not in low:
+        return False
+    if item["kind"] == "death" and not ("помер" in low or "загин" in low):
+        return False
     if quiz.has_foreign_cyrillic(text):
-        return False  # foreign club or famous person written in Cyrillic
+        return False  # a foreign club or famous person written in Cyrillic
     name = item["name"]
     if item["kind"] in ("birth", "death") and name:
         latin = re.search(r"[A-Za-z]", name) is not None
         if not item["ua"] and latin and name not in text:
-            return False  # foreign people must keep their international (Latin) name exactly
+            return False  # foreign people must keep their international (Latin) name
         if item["ua"] and not latin and name not in text:
             return False  # Ukrainians: the Ukrainian name exactly as in the source
     return True
@@ -204,18 +208,22 @@ def format_with_ai(items, run_start):
                 "description": it["desc"], "text": it["text"], "ukrainian": it["ua"]}
                for i, it in enumerate(items)]
     prompt = (
-        "Ти редактор українського футбольного Telegram-каналу. Нижче наведені СТРOГО ПЕРЕВІРЕНІ "
-        "факти з Вікіпедії та Вікіданих. Напиши для кожного запису ДВА рядки українською мовою:\n"
-        "Рядок 1 (title): Короткий заголовок суті події (БЕЗ року на початку).\n"
-        "Рядок 2 (text): Детальніший опис події у 1-2 реченнях.\n\n"
+        "Ти редактор українського футбольного Telegram-каналу. Нижче перевірені факти з "
+        "Вікіпедії та Вікіданих. Для кожного напиши ОДИН короткий рядок українською, БЕЗ року на початку.\n"
         "Правила:\n"
-        "- використовуй ТІЛЬКИ дані з наведеного запису; НІЧОГО НЕ ВИГАДУЙ, не додавай від себе жодних "
-        "чисел, рахунків, деталей чи оцінок;\n"
-        "- ІМЕНА ТА НАЗВИ КЛУБІВ: іноземних людей та іноземні клуби залишай ЛАТИНКОЮ точно так, як у "
-        "вхідних даних (Zvonimir Boban, AC Milan, Real Madrid, Arsenal). Українською пиши лише українські "
-        "клуби та людей із ukrainian=true;\n"
-        "- без емодзі та Markdown.\n"
-        'Відповідай ЛИШЕ JSON: {"lines": [{"id": 0, "title": "...", "text": "..."}, ...]}\n\n'
+        "- використовуй ТІЛЬКИ дані з наведеного запису; нічого не додавай і не вигадуй; "
+        "не змінюй і не додавай жодних чисел, рахунків, назв, дат;\n"
+        "- для type=birth почни з «народився» («народилася»), для type=death з «помер» («померла»), "
+        "далі ім'я та коротко хто це за описом (національність, футболіст/тренер); "
+        "для type=event коротко перекажи подію;\n"
+        "- ІМЕНА, ПРІЗВИЩА та НАЗВИ КЛУБІВ: іноземних людей та іноземні клуби залишай ЛАТИНКОЮ "
+        "точно так, як у вхідних даних, і НЕ перекладай та НЕ транслітеруй їх кирилицею "
+        "(Zvonimir Boban, AC Milan, Real Madrid). Українською пиши лише назви українських клубів "
+        "(Динамо Київ, Шахтар, Дніпро, Зоря, Металіст, Карпати, Чорноморець, Ворскла, Кривбас, "
+        "Олександрія, Колос, Рух, Верес, Полісся) та імена людей, у яких ukrainian=true "
+        "(використай name точно як у вхідних даних); назви країн і змагань пиши українською;\n"
+        "- без оцінок, епітетів, емодзі, Markdown і посилань.\n"
+        'Відповідай ЛИШЕ JSON: {"lines": [{"id": 0, "text": "..."}, ...]} (id з вхідних даних).\n\n'
         + json.dumps(payload, ensure_ascii=False)
     )
     res = quiz.ai_call(prompt, run_start)
@@ -224,28 +232,24 @@ def format_with_ai(items, run_start):
     raw, _engine = res
     try:
         data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
-        parsed = {int(x["id"]): (quiz.clean(x["title"]), quiz.clean(x["text"])) for x in data["lines"]}
+        texts = {int(x["id"]): quiz.clean(x["text"]) for x in data["lines"]}
     except Exception as e:
         print("  AI answer is not usable:", e)
         return []
     lines = []
-    idx = 1
     for i, it in enumerate(items):
-        if i in parsed:
-            title, text = parsed[i]
-            if line_ok(it, f"{title} {text}"):
-                lines.append(f"{idx}. {it['year']} — {title}\n{text}")
-                idx += 1
-            else:
-                print(f"  fact dropped by safety check: {it['year']} {it['name'] or it['text'][:50]}")
+        if i in texts and line_ok(it, texts[i]):
+            lines.append(f"{it['year']} — {texts[i]}")
+        else:
+            print(f"  fact dropped by the safety check: {it['year']} {it['name'] or it['text'][:50]}")
     return lines
 
 
 # ------------------------------------------------------------------ message building
 
 def build_messages(lines, day, month):
-    head = "<b>Цього дня в історії футболу</b>\n\n"
-    cont = "<b>Цього дня в історії футболу (продовження)</b>\n\n"
+    head = f"⚽ <b>Цього дня в історії футболу</b>\n📅 {day} {MONTHS[month - 1]}\n\n"
+    cont = "⚽ <b>Цього дня в історії футболу (продовження)</b>\n\n"
     messages, current = [], head
     for ln in lines:
         ln = html.escape(ln)

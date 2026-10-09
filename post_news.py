@@ -48,10 +48,10 @@ STATE_FILE = Path("posted.json")
 FEEDS_FILE = Path("feeds.txt")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Connection": "keep-alive"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+    "Accept-Language": "uk-UA,uk;q=0.9",
 }
 
 # Words that mark a news item as football (lowercase, matched as substrings).
@@ -61,25 +61,12 @@ FOOTBALL_WORDS = (
     "тренер", "динамо", "шахтар", "барселон", "реал", "ліверпул", "арсенал", "челсі",
     "манчестер", "баварі", "ювентус", "мілан", "інтер", "псж", "мессі", "роналду",
     "забарн", "довбик", "мудрик", "гол ", "голи", "воротар", "півзахисник",
-    "нападник", "захисник", "уєфа", "фіфа"
+    "нападник", "захисник", "уєфа", "фіфа", "футзал",
 )
-
-SKIP_WORDS = (
-    "прогноз", "ставк", "букмекер", "бонус", "трансляц", "дивитись онлайн",
-    # Блокування анонсів трансляцій та 'де дивитися'
-    "де дивитися", "де дивитись", "де переглянути", "пряма трансляція", "онлайн-трансляція",
-    # Блокування жіночого футболу
-    "жіноч", "жінок", "женск", "жін ",
-    # Блокування статей-дайджестів та підбірок новин
-    "головні новини", "підсумки дня", "добірк", "головних новин", "главные новости",
-    # Блокування інших видів спорту та єдиноборств
-    "теніс", "світолін", "костюк", "баскетбол", "волейбол", "хокей", "біатлон",
-    "бокс", "мма", "ufc", "боротьб", "дзюдо", "карате", "джиу-джитсу",
-    "олімпіад", "олімпійськ", "формула-1", "f1", "легка атлетик", "гімнастик",
-    "плаванн", "гандбол", "футзал", "пляжний футбол",
-)
-
+SKIP_WORDS = ("прогноз", "ставк", "букмекер", "бонус", "трансляц", "дивитись онлайн")
+# News whose TITLE contains one of these whole words are never published.
 SKIP_TITLE_RE = re.compile(r"\b(відео|видео)\b", re.IGNORECASE)
+
 
 def local(tag):
     return tag.split("}")[-1]
@@ -136,29 +123,27 @@ def parse_feed(xml_bytes):
             elif name == "enclosure" and ch.attrib.get("url"):
                 if ch.attrib.get("type", "image").startswith("image"):
                     d["image"] = d["image"] or ch.attrib["url"]
-        # media:content / media:thumbnail
+        # media:content / media:thumbnail (names clash with "content" above)
         for ch in el:
             if local(ch.tag) in ("content", "thumbnail") and ch.attrib.get("url"):
                 t = ch.attrib.get("type", "image")
                 if t.startswith("image") or ch.attrib.get("medium") == "image" \
-                   or local(ch.tag) == "thumbnail":
+                        or local(ch.tag) == "thumbnail":
                     d["image"] = d["image"] or ch.attrib["url"]
         if not d["image"]:
-                        m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', d["content"] + d["summary"])
-                        if m:
-                            d["image"] = html.unescape(m.group(1))
-            
+            m = re.search(r'<img[^>]+src=["\']([^"\']+)', d["content"] + d["summary"])
+            if m:
+                d["image"] = html.unescape(m.group(1))
         if d["link"] and d["title"]:
-            if d["ts"] > 0 and (time.time() - d["ts"]) > 10800:
-                continue
             out.append(d)
-        
-        return out
+    return out
+
 
 def fetch_feed(url):
     r = requests.get(url, headers=HEADERS, timeout=30)
     r.raise_for_status()
     return parse_feed(r.content)
+
 
 def is_football(item):
     if SKIP_TITLE_RE.search(item["title"]):
@@ -219,52 +204,53 @@ def list_candidates():
     return cands
 
 
-import google.generativeai as genai
+def call_gemini(model, prompt):
+    """One model, with retries when Google is overloaded (503) or rate limits (429)."""
+    for attempt, pause in enumerate((0, 4, 10)):
+        if pause:
+            time.sleep(pause)
+        r = requests.post(
+            f"{GEMINI_API}/models/{model}:generateContent",
+            params={"key": GEMINI_KEY},
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=45,
+        )
+        if r.status_code in TRANSIENT and attempt < 2:
+            print(f"  model {model}: HTTP {r.status_code}, retrying...")
+            continue
+        if r.status_code >= 400:
+            print(f"  model {model}: HTTP {r.status_code} {r.text[:200]}")
+            r.raise_for_status()
+        return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
 
 def ask_gemini(prompt):
-    """Вызывает Gemini с использованием официальной библиотеки Google."""
-    if not GEMINI_KEY:
-        raise RewriteFailed("GEMINI_API_KEY is not set")
-    
-    # Настраиваем ключ
-    genai.configure(api_key=GEMINI_KEY)
-    
-    # Список актуальных моделей для перебора в случае перегрузки
-    models = ["gemini-1.5-flash", "gemini-1.5-pro"]
-    
-    for model_name in models:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            if response and response.text:
-                print(f"Gemini model that works: {model_name}")
-                return response.text.strip()
-        except Exception as e:
-            print(f"model {model_name} failed: {e}")
+    """Tries the last working model first, then the others. Raises if none answers."""
+    order, tried_models = [], set()
+    for m in [_state["good"], GEMINI_MODEL] + list_candidates():
+        if m and m not in tried_models:
+            tried_models.add(m)
+            order.append(m)
+    attempts = 0
+    for model in order:
+        if model in _state["failed"]:
             continue
-            
-    raise RewriteFailed("no Gemini model answered")
-
-
-    
-    
-    for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_KEY}"
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+        if attempts >= 6:
+            break
+        attempts += 1
         try:
-            r = requests.post(url, json=payload, timeout=20)
-            if r.status_code == 429:
-                print(f"  model {model}: HTTP 429 (quota exceeded)")
-                continue
-            r.raise_for_status()
-            data = r.json()
-            text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            print(f"  Gemini model that works: {model}")
-            return text
-        except Exception as e:
-            print(f"  model {model} failed: {e}")
-            
-    raise RewriteFailed("no Gemini model answered")
+            out = call_gemini(model, prompt)
+            if _state["good"] != model:
+                print("  Gemini model that works:", model)
+                _state["good"] = model
+            return out
+        except requests.HTTPError as e:
+            code = e.response.status_code if e.response is not None else 0
+            if code in (404, 400):
+                _state["failed"].add(model)  # permanently unusable for this key
+        except requests.RequestException as e:
+            print(f"  model {model}: {e}")
+    raise RuntimeError("no Gemini model answered")
 
 
 def ask_openai_compat(name, prompt):
@@ -292,7 +278,7 @@ def ask_openai_compat(name, prompt):
 
 
 def rewrite(title, text):
-    """Returns (headline, body). Uses Gemini if a key is set."""
+    """Returns (headline, body). Raises RewriteFailed if AI is configured but all failed."""
     engines = []
     if GEMINI_KEY:
         engines.append(("Gemini", ask_gemini))
@@ -301,37 +287,28 @@ def rewrite(title, text):
             engines.append((n, lambda p, n=n: ask_openai_compat(n, p)))
     if engines:
         prompt = (
-            "Ти редактор українського Telegram-каналу СТРОГО про класичний великий футбол «Football 90+». "
-            "Напиши один якісний, насичений фактами пост на основі наданої новини українською мовою.\n\n"
-            "ОБСЯГ ТА СТИЛЬ:\n"
-            "- Для звичайних новин: 450–550 символів;\n"
-            "- Для великих статей, інтерв'ю та розлогих цитат: до 700 символів (щоб повністю розкрити зміст);\n"
-            "- Передавай КОНКРЕТНІ ФАКТИ, СТАТИСТИКУ ТА СУТЬ слів/подій! "
-            "Категорично заборонено використовувати порожню 'журналістську воду' (фрази типу 'тренер поділився думками', "
-            "'фахівець відверто розповів', 'щира рефлексія'). Одразу розкрий суть: що конкретно сталося, які цифри "
-            "або які саме слова сказав тренер/гравець;\n"
-            "- Пиши ТІЛЬКИ про класичний футбол (гравці, тренери, матчі, трансфери);\n"
-            "- Повністю ІГНОРУЙ інші види спорту (теніс, бокс, футзал, Олімпіаду тощо), навіть якщо вони є у тексті;\n"
-            "- Без посилань, без згадок сайту чи джерела, нічого не вигадуй.\n\n"
-            "ФОРМАТ ВІДПОВІДІ:\n"
-            "Перший рядок - короткий влучний заголовок з одним доречним емодзі на початку.\n"
-            "Далі порожній рядок і один-два місткі абзаци з фактами.\n\n"
+            "Ти редактор українського футбольного Telegram-каналу «football 90+». "
+            "Перепиши новину своїми словами українською: 350-600 символів, "
+            "жива мова, без посилань, без згадок джерела чи сайту, лише факти з тексту. "
+            "Не вигадуй деталей, яких немає в тексті. "
+            "Формат відповіді: перший рядок - короткий заголовок з одним доречним емодзі "
+            "на початку, далі порожній рядок і текст.\n\n"
             f"Заголовок: {title}\n\nТекст:\n{text}"
         )
-    for name, fn in engines:
-        try:
-            out = fn(prompt)
-            head, _, body = out.partition("\n")
-            head, body = head.strip().strip("*#").strip(), body.strip()
-            if head and body:
-                return head, body
-            print(f" {name}: answer in unexpected format")
-        except Exception as e:
-            print(f" {name} failed:", e)
-
-    if REQUIRE_REWRITE:
-        raise RewriteFailed("all AI engines failed")
+        for name, fn in engines:
+            try:
+                out = fn(prompt)
+                head, _, body = out.partition("\n")
+                head, body = head.strip().strip("*#").strip(), body.strip()
+                if head and body:
+                    return head, body
+                print(f"  {name}: answer in unexpected format")
+            except Exception as e:
+                print(f"  {name} failed:", e)
+        if REQUIRE_REWRITE:
+            raise RewriteFailed("all AI engines failed")
     return "⚽ " + title, text[:500]
+
 
 def build_caption(head, body, limit=1024):
     head = re.sub(r"https?://\S+", "", head).strip()
@@ -519,7 +496,7 @@ def main():
             failed_in_row = 0
             print("  Published.")
             if posted_now < MAX_PER_RUN:
-                time.sleep(10)  # be gentle with Telegram between posts
+                time.sleep(2)  # be gentle with Telegram between posts
         except RewriteFailed:
             failed_in_row += 1
             print("  Could not be processed now - it stays in the queue, trying the next one.")
