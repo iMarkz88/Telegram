@@ -522,7 +522,7 @@ def main():
             failed_in_row = 0
             print("  Published.")
             if posted_now < MAX_PER_RUN:
-                time.sleep(2)  # be gentle with Telegram between posts
+                time.sleep(10)  # be gentle with Telegram between posts
         except RewriteFailed:
             failed_in_row += 1
             print("  Could not be processed now - it stays in the queue, trying the next one.")
