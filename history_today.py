@@ -89,7 +89,7 @@ SELECT ?p ?pLabel ?pDescription ?date ?sl WHERE {{
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "{langs}". }}
 }}
 ORDER BY DESC(?sl)
-LIMIT 12"""
+LIMIT 8"""
 
 
 def parse_people(bindings, kind, ukrainian):
