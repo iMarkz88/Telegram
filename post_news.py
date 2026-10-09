@@ -304,14 +304,14 @@ def rewrite(title, text):
             engines.append((n, lambda p, n=n: ask_openai_compat(n, p)))
     if engines:
         prompt = (
-            "Ти редактор українського Telegram-каналу СТРОГО про класичний великий футбол «football 90+». "
+            "Ти редактор українського Telegram-каналу СТРОГО про класичний великий футбол «Football 90+». "
             "Напиши один якісний, насичений фактами пост на основі наданої новини українською мовою.\n\n"
             "ОБСЯГ ТА СТИЛЬ:\n"
             "- Для звичайних новин: 450–550 символів;\n"
             "- Для великих статей, інтерв'ю та розлогих цитат: до 700 символів (щоб повністю розкрити зміст);\n"
-            "- Передавай КОНКРЕТНІ ФАКТИ, СТАТИСТИКУ ТА СУТЬ слів/події! "
+            "- Передавай КОНКРЕТНІ ФАКТИ, СТАТИСТИКУ ТА СУТЬ слів/подій! "
             "Категорично заборонено використовувати порожню 'журналістську воду' (фрази типу 'тренер поділився думками', "
-            "'фахівець відверто розповів', 'щира рефлексія'). Одразу розкривай суть: що конкретно сталося, які цифри "
+            "'фахівець відверто розповів', 'щира рефлексія'). Одразу розкрий суть: що конкретно сталося, які цифри "
             "або які саме слова сказав тренер/гравець;\n"
             "- Пиши ТІЛЬКИ про класичний футбол (гравці, тренери, матчі, трансфери);\n"
             "- Повністю ІГНОРУЙ інші види спорту (теніс, бокс, футзал, Олімпіаду тощо), навіть якщо вони є у тексті;\n"
@@ -322,15 +322,15 @@ def rewrite(title, text):
             f"Заголовок: {title}\n\nТекст:\n{text}"
         )
     for name, fn in engines:
-            try:
-                out = fn(prompt)
-                head, _, body = out.partition("\n")
-                head, body = head.strip().strip("*#").strip(), body.strip()
-                if head and body:
-                    return head, body
-                print(f" {name}: answer in unexpected format")
-            except Exception as e:
-                print(f" {name} failed:", e)
+        try:
+            out = fn(prompt)
+            head, _, body = out.partition("\n")
+            head, body = head.strip().strip("*#").strip(), body.strip()
+            if head and body:
+                return head, body
+            print(f" {name}: answer in unexpected format")
+        except Exception as e:
+            print(f" {name} failed:", e)
 
     if REQUIRE_REWRITE:
         raise RewriteFailed("all AI engines failed")
