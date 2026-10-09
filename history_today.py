@@ -37,7 +37,10 @@ MONTHS = ["січня", "лютого", "березня", "квітня", "тр�
           "вересня", "жовтня", "листопада", "грудня"]
 
 FOOT_YES = re.compile(r"football\w*|soccer|FIFA|UEFA|Premier League|Champions League|"
-                      r"Europa League|Serie A|La Liga|Bundesliga|Ligue 1|FA Cup|Ballon d.Or", re.I)
+                      r"Europa League|Serie A|La Liga|Bundesliga|Ligue 1|FA Cup|Ballon d.Or|"
+                      r"\bclub\b|\bmatch\b|\bstadium\b|\bplayer\b|\bgoal\b|\bteam\b|"
+                      r"\bleague\b|\bcup\b|\bfinal\b|\btournament\b|\bcoach\b|\breferee\b|"
+                      r"World Cup|European Championship|Olympic", re.I)
 FOOT_NO = re.compile(r"American football|NFL|Super Bowl|Gaelic|Australian rules|rugby|cricket|"
                      r"Canadian football|college football|gridiron|\bAFL\b", re.I)
 
