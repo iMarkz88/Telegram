@@ -249,8 +249,8 @@ def format_with_ai(items, run_start):
 # ------------------------------------------------------------------ message building
 
 def build_messages(lines, day, month):
-    head = f"⚽ <b>Цього дня в історії футболу</b>\n📅 {day} {MONTHS[month - 1]}\n\n"
-    cont = "⚽ <b>Цього дня в історії футболу (продовження)</b>\n\n"
+    head = "<b>Цього дня в історії футболу</b>\n\n"
+    cont = "<b>Цього дня в історії футболу (продовження)</b>\n\n"
     messages, current = [], head
     for ln in lines:
         ln = html.escape(ln)
