@@ -45,13 +45,30 @@ FOOT_NO = re.compile(r"American football|NFL|Super Bowl|Gaelic|Australian rules|
 # ------------------------------------------------------------------ sources
 
 def run_sparql(query):
-    r = requests.get("https://query.wikidata.org/sparql",
-                     params={"query": query, "format": "json"},
-                     headers={**WIKI_HEADERS, "Accept": "application/sparql-results+json"},
-                     timeout=70)
-    r.raise_for_status()
-    return r.json()["results"]["bindings"]
-
+    """Выполняет SPARQL-запрос с повторными попытками при таймаутах."""
+    last_error = None
+    for attempt in range(3):  # 3 попытки
+        try:
+            r = requests.get("https://query.wikidata.org/sparql",
+                             params={"query": query, "format": "json"},
+                             headers={**WIKI_HEADERS, "Accept": "application/sparql-results+json"},
+                             timeout=120)  # увеличили с 70 до 120 секунд
+            r.raise_for_status()
+            return r.json()["results"]["bindings"]
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last_error = e
+            wait = 5 * (attempt + 1)  # 5, 10, 15 секунд
+            print(f"  SPARQL timeout (попытка {attempt + 1}/3), ждём {wait} с...")
+            time.sleep(wait)
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in (502, 503, 504):
+                last_error = e
+                wait = 5 * (attempt + 1)
+                print(f"  SPARQL {e.response.status_code} (попытка {attempt + 1}/3), ждём {wait} с...")
+                time.sleep(wait)
+            else:
+                raise
+    raise last_error
 
 def people_query(kind, month, day, ukrainian):
     prop = "P569" if kind == "birth" else "P570"
