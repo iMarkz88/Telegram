@@ -321,9 +321,9 @@ def rewrite(title, text):
             "Далі порожній рядок і один-два місткі абзаци з фактами.\n\n"
             f"Заголовок: {title}\n\nТекст:\n{text}"
         )
-for name, fn in engines:
-    try:
-        out = fn(prompt)
+    for name, fn in engines:
+        try:
+            out = fn(prompt)
         head, _, body = out.partition("\n")
         head, body = head.strip().strip("*#").strip(), body.strip()
         if head and body:
@@ -332,9 +332,9 @@ for name, fn in engines:
     except Exception as e:
         print(f" {name} failed:", e)
 
-if REQUIRE_REWRITE:
-    raise RewriteFailed("all AI engines failed")
-return "⚽ " + title, text[:500]
+    if REQUIRE_REWRITE:
+        raise RewriteFailed("all AI engines failed")
+    return "⚽ " + title, text[:500]
 
 
 def build_caption(head, body, limit=1024):
