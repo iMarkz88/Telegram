@@ -202,7 +202,7 @@ def numbers(s):
     return set(re.findall(r"\d+", s))
 
 
-   def line_ok(item, text):
+def line_ok(item, text):
     src = numbers(f"{item['year']} {item['text']} {item['desc']} {item['name']}")
     if not (12 <= len(text) <= 330) or not numbers(text) <= src:
         return False
