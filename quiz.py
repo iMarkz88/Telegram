@@ -418,5 +418,15 @@ def has_foreign_cyrillic(text):
             return True
     return False
 
+# ---------------------------------------------------------------- validation
+
+def has_foreign_cyrillic(text):
+    """Ловит русские буквы (ы, э, ё, ъ) в тексте."""
+    russian_chars = set("ыэёъ")
+    for char in text.lower():
+        if char in russian_chars:
+            return True
+    return False
+
 if __name__ == "__main__":
     main()
