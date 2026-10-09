@@ -234,32 +234,34 @@ def call_gemini(model, prompt):
 
 
 def ask_gemini(prompt):
-    """Tries the last working model first, then the others. Raises if none answers."""
-    order, tried_models = [], set()
-    for m in [_state["good"], GEMINI_MODEL] + list_candidates():
-        if m and m not in tried_models:
-            tried_models.add(m)
-            order.append(m)
-    attempts = 0
-    for model in order:
-        if model in _state["failed"]:
-            continue
-        if attempts >= 6:
-            break
-        attempts += 1
+    """Calls Gemini with automatic fallback between active official flash models."""
+    if not GEMINI_KEY:
+        raise RewriteFailed("GEMINI_API_KEY is not set")
+    
+    # Список строго актуальных и доступных моделей Google AI Studio
+    models = [
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash",
+    ]
+    
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_KEY}"
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
         try:
-            out = call_gemini(model, prompt)
-            if _state["good"] != model:
-                print("  Gemini model that works:", model)
-                _state["good"] = model
-            return out
-        except requests.HTTPError as e:
-            code = e.response.status_code if e.response is not None else 0
-            if code in (404, 400):
-                _state["failed"].add(model)  # permanently unusable for this key
-        except requests.RequestException as e:
-            print(f"  model {model}: {e}")
-    raise RuntimeError("no Gemini model answered")
+            r = requests.post(url, json=payload, timeout=20)
+            if r.status_code == 429:
+                print(f"  model {model}: HTTP 429 (quota exceeded)")
+                continue
+            r.raise_for_status()
+            data = r.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            print(f"  Gemini model that works: {model}")
+            return text
+        except Exception as e:
+            print(f"  model {model} failed: {e}")
+            
+    raise RewriteFailed("no Gemini model answered")
 
 
 def ask_openai_compat(name, prompt):
