@@ -144,16 +144,16 @@ def parse_feed(xml_bytes):
                    or local(ch.tag) == "thumbnail":
                     d["image"] = d["image"] or ch.attrib["url"]
         if not d["image"]:
-                    m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', d["content"] + d["summary"])
-                    if m:
-                        d["image"] = html.unescape(m.group(1))
+                        m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', d["content"] + d["summary"])
+                        if m:
+                            d["image"] = html.unescape(m.group(1))
+            
+        if d["link"] and d["title"]:
+            if d["ts"] > 0 and (time.time() - d["ts"]) > 10800:
+                continue
+            out.append(d)
         
-                if d["link"] and d["title"]:
-                    if d["ts"] > 0 and (time.time() - d["ts"]) > 10800:
-                        continue
-                    out.append(d)
-        
-            return out
+        return out
 
 def fetch_feed(url):
     r = requests.get(url, headers=HEADERS, timeout=30)
