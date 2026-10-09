@@ -182,25 +182,32 @@ def numbers(s):
     return set(re.findall(r"\d+", s))
 
 
-    if quiz.has_foreign_cyrillic(text):
-        return False
+   def line_ok(item, text):
+    # Проверка длины и чисел
     src = numbers(f"{item['year']} {item['text']} {item['desc']} {item['name']}")
     if not (12 <= len(text) <= 330) or not numbers(text) <= src:
-        return False  # the AI must not introduce any number that is not in the source
+        return False
+    
     low = text.lower()
+    
+    # Проверка на ключевые слова для рождения/смерти
     if item["kind"] == "birth" and "народив" not in low:
         return False
     if item["kind"] == "death" and not ("помер" in low or "загин" in low):
         return False
+    
+    # Проверка на русские буквы (ОДИН РАЗ, а не два)
     if quiz.has_foreign_cyrillic(text):
-        return False  # a foreign club or famous person written in Cyrillic
+        return False
+    
+    # Проверка имён
     name = item["name"]
     if item["kind"] in ("birth", "death") and name:
         latin = re.search(r"[A-Za-z]", name) is not None
         if not item["ua"] and latin and name not in text:
-            return False  # foreign people must keep their international (Latin) name
+            return False
         if item["ua"] and not latin and name not in text:
-            return False  # Ukrainians: the Ukrainian name exactly as in the source
+            return False
     return True
 
 
