@@ -219,37 +219,34 @@ def list_candidates():
     return cands
 
 
-def call_gemini(model, prompt):
-    """One model, with retries when Google is overloaded (503) or rate limits (429)."""
-    for attempt, pause in enumerate((0, 4, 10)):
-        if pause:
-            time.sleep(pause)
-        r = requests.post(
-            f"{GEMINI_API}/models/{model}:generateContent",
-            params={"key": GEMINI_KEY},
-            json={"contents": [{"parts": [{"text": prompt}]}]},
-            timeout=45,
-        )
-        if r.status_code in TRANSIENT and attempt < 2:
-            print(f"  model {model}: HTTP {r.status_code}, retrying...")
-            continue
-        if r.status_code >= 400:
-            print(f"  model {model}: HTTP {r.status_code} {r.text[:200]}")
-            r.raise_for_status()
-        return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-
+import google.generativeai as genai
 
 def ask_gemini(prompt):
-    """Calls Gemini with automatic fallback between active official flash models."""
+    """Вызывает Gemini с использованием официальной библиотеки Google."""
     if not GEMINI_KEY:
         raise RewriteFailed("GEMINI_API_KEY is not set")
     
-    # Список строго актуальных и доступных моделей Google AI Studio
-    models = [
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash",
-    ]
+    # Настраиваем ключ
+    genai.configure(api_key=GEMINI_KEY)
+    
+    # Список актуальных моделей для перебора в случае перегрузки
+    models = ["gemini-1.5-flash", "gemini-1.5-pro"]
+    
+    for model_name in models:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            if response and response.text:
+                print(f"Gemini model that works: {model_name}")
+                return response.text.strip()
+        except Exception as e:
+            print(f"model {model_name} failed: {e}")
+            continue
+            
+    raise RewriteFailed("no Gemini model answered")
+
+
+    
     
     for model in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_KEY}"
