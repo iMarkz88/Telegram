@@ -335,16 +335,17 @@ def rewrite(title, text):
 for name, fn in engines:
     try:
         out = fn(prompt)
-                head, _, body = out.partition("\n")
-                head, body = head.strip().strip("*#").strip(), body.strip()
-                if head and body:
-                    return head, body
-                print(f"  {name}: answer in unexpected format")
-            except Exception as e:
-                print(f"  {name} failed:", e)
-        if REQUIRE_REWRITE:
-            raise RewriteFailed("all AI engines failed")
-    return "⚽ " + title, text[:500]
+        head, _, body = out.partition("\n")
+        head, body = head.strip().strip("*#").strip(), body.strip()
+        if head and body:
+            return head, body
+        print(f"  {name}: answer in unexpected format")
+    except Exception as e:
+        print(f"  {name} failed:", e)
+        
+if REQUIRE_REWRITE:
+    raise RewriteFailed("all AI engines failed")
+return "⚽ " + title, text[:500]
 
 
 def build_caption(head, body, limit=1024):
