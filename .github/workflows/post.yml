@@ -82,7 +82,7 @@ jobs:
           LLM2_MODEL: "openai/gpt-4o-mini"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           USE_SOURCE_IMAGE: "true"
-          MAX_PER_RUN: "1"
+          MAX_PER_RUN: "3"
           POST_INTERVAL_MIN: "20"
           QUIET_FROM: "21:30"
           QUIET_TO: "07:30"
