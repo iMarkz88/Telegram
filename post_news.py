@@ -136,27 +136,25 @@ def parse_feed(xml_bytes):
             elif name == "enclosure" and ch.attrib.get("url"):
                 if ch.attrib.get("type", "image").startswith("image"):
                     d["image"] = d["image"] or ch.attrib["url"]
-        # media:content / media:thumbnail (names clash with "content" above)
+        # media:content / media:thumbnail
         for ch in el:
             if local(ch.tag) in ("content", "thumbnail") and ch.attrib.get("url"):
                 t = ch.attrib.get("type", "image")
                 if t.startswith("image") or ch.attrib.get("medium") == "image" \
-                        or local(ch.tag) == "thumbnail":
+                   or local(ch.tag) == "thumbnail":
                     d["image"] = d["image"] or ch.attrib["url"]
-    if not d["image"]:
+      if not d["image"]:
             m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', d["content"] + d["summary"])
             if m:
                 d["image"] = html.unescape(m.group(1))
 
         if d["link"] and d["title"]:
-            # Пропускаем новости старше 3 часов (3 * 3600 секунд)
+            # Пропускаем новости старше 3 часов (10800 секунд)
             if d["ts"] > 0 and (time.time() - d["ts"]) > 10800:
                 continue
             out.append(d)
 
     return out
-
-
 def fetch_feed(url):
     r = requests.get(url, headers=HEADERS, timeout=30)
     r.raise_for_status()
