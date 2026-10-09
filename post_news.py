@@ -143,12 +143,17 @@ def parse_feed(xml_bytes):
                 if t.startswith("image") or ch.attrib.get("medium") == "image" \
                         or local(ch.tag) == "thumbnail":
                     d["image"] = d["image"] or ch.attrib["url"]
-        if not d["image"]:
-            m = re.search(r'<img[^>]+src=["\']([^"\']+)', d["content"] + d["summary"])
+    if not d["image"]:
+            m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', d["content"] + d["summary"])
             if m:
                 d["image"] = html.unescape(m.group(1))
+
         if d["link"] and d["title"]:
+            # Пропускаем новости старше 3 часов (3 * 3600 секунд)
+            if d["ts"] > 0 and (time.time() - d["ts"]) > 10800:
+                continue
             out.append(d)
+
     return out
 
 
