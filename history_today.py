@@ -191,7 +191,7 @@ def select(items, total):
     by_score = lambda xs: sorted(xs, key=lambda i: -i["score"])
     people = [i for i in items if i["kind"] in ("birth", "death")]
     take(by_score([i for i in people if i["ua"]]), 2)
-    take([i for i in items if i["kind"] == "event"], 7)
+    take([i for i in items if i["kind"] == "event"], 8)
     take(by_score([i for i in people if i["kind"] == "birth"]), 5 - sum(c["kind"] == "birth" for c in chosen) + 0)
     take(by_score([i for i in people if i["kind"] == "death"]), 3 - sum(c["kind"] == "death" for c in chosen))
     take(by_score([i for i in items if i not in chosen]), total)  # fill the rest
