@@ -550,7 +550,7 @@ def main():
                     if not head or not body:
                         raise RewriteFailed("empty rewrite")
                     break
-            except RewriteFailed:
+                except RewriteFailed:
                         ...
                 send(build_caption(head, body), image if USE_SOURCE_IMAGE else "")
                 seen.append(k); seen_set.add(k)
