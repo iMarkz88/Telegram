@@ -152,7 +152,17 @@ def is_football(item):
     if any(w in blob for w in SKIP_WORDS):
         return False
     return (not FOOTBALL_ONLY) or any(w in blob for w in FOOTBALL_WORDS)
+ANNOUNCE_WORDS = (
+    "проаналізуємо", "розповімо", "покажемо", "дізнаєтесь", "читайте",
+    "дивитись", "дивитися", "у матеріалі", "у статті", "далі буде",
+    "пропонуємо", "представляємо", "огляд", "анонс",
+)
 
+
+def is_announcement(item):
+    """Отсеивает анонсы статей, а не сами новости."""
+    blob = (item["title"] + " " + to_text(item["summary"])).lower()
+    return any(w in blob for w in ANNOUNCE_WORDS)
 
 def item_key(item):
     return hashlib.sha1(item["link"].encode()).hexdigest()[:16]
