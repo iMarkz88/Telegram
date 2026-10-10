@@ -41,7 +41,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: "gemini-3.5-flash"
-          LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
+          LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
           LLM2_MODEL: "openai/gpt-4o-mini"
           LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
           LLM3_MODEL: "deepseek-chat"
@@ -62,7 +62,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: "gemini-3.5-flash"
-          LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
+          LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
           LLM2_MODEL: "openai/gpt-4o-mini"
           LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
           LLM3_MODEL: "deepseek-chat"
@@ -84,7 +84,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: "gemini-3.5-flash"
-          LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
+          LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
           LLM2_MODEL: "openai/gpt-4o-mini"
           LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
           LLM3_MODEL: "deepseek-chat"
