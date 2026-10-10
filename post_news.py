@@ -527,14 +527,14 @@ def main():
         attempts += 1
         item_start = now_ts()
         print("Processing:", it["title"])
-     try:
-         text = to_text(it["content"]) or to_text(it["summary"])
-         image = it["image"]
-         if FETCH_ARTICLE:
-             full, og = fetch_article(it["link"])
-             if len(full) > 200:
-                 text = full
-             image = image or og
+        try:
+            text = to_text(it["content"]) or to_text(it["summary"])
+            image = it["image"]
+            if FETCH_ARTICLE:
+                full, og = fetch_article(it["link"])
+                if len(full) > 200:
+                    text = full
+            image = image or og
 
             has_numbers = bool(re.search(r"\d", text))
             has_names = bool(re.search(r"[A-ZА-ЯІЇЄ][a-zа-яіїє]{2,}", text))
