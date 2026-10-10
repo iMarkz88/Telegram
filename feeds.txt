@@ -3,3 +3,4 @@
 # Ниже адреса-догадки, они могут не существовать. Проверьте и оставьте рабочие.
 https://24tv.ua/rss/all.xml
 https://sportarena.ua/uk/footboll/feed/
+https://profootball.ua/uk/feed/
