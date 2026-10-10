@@ -205,77 +205,72 @@ def list_candidates():
 
 
 def call_gemini(model, prompt):
-    """One model, with retries when Google is overloaded (503) or rate limits (429)."""
-    for attempt, pause in enumerate((0, 4, 10)):
-        if pause:
-            time.sleep(pause)
-        r = requests.post(
-            f"{GEMINI_API}/models/{model}:generateContent",
-            params={"key": GEMINI_KEY},
-            json={"contents": [{"parts": [{"text": prompt}]}]},
-            timeout=45,
-        )
-        if r.status_code in TRANSIENT and attempt < 2:
-            print(f"  model {model}: HTTP {r.status_code}, retrying...")
-            continue
-        if r.status_code >= 400:
-            print(f"  model {model}: HTTP {r.status_code} {r.text[:200]}")
-            r.raise_for_status()
-        return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    """One attempt per model. No internal retries — the outer loop handles them."""
+    r = requests.post(
+        f"{GEMINI_API}/models/{model}:generateContent",
+        params={"key": GEMINI_KEY},
+        json={"contents": [{"parts": [{"text": prompt}]}]},
+        timeout=45,
+    )
+    if r.status_code >= 400:
+        print(f"  model {model}: HTTP {r.status_code}")
+        r.raise_for_status()
+    return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
 def ask_gemini(prompt):
-    """Tries the last working model first, then the others. Raises if none answers."""
+    """Two passes over all models, one attempt per model per pass."""
     order, tried_models = [], set()
     for m in [_state["good"], GEMINI_MODEL] + list_candidates():
         if m and m not in tried_models:
             tried_models.add(m)
             order.append(m)
-    attempts = 0
-    for model in order:
-        if model in _state["failed"]:
-            continue
-        if attempts >= 6:
-            break
-        attempts += 1
-        try:
-            out = call_gemini(model, prompt)
-            if _state["good"] != model:
-                print("  Gemini model that works:", model)
-                _state["good"] = model
-            return out
-        except requests.HTTPError as e:
-            code = e.response.status_code if e.response is not None else 0
-            if code in (404, 400):
-                _state["failed"].add(model)  # permanently unusable for this key
-        except requests.RequestException as e:
-            print(f"  model {model}: {e}")
-    raise RuntimeError("no Gemini model answered")
+
+    for pass_num in (1, 2):
+        print(f"  Gemini pass {pass_num}/2 over {len(order)} model(s)")
+        for model in order:
+            if model in _state["failed"]:
+                continue
+            try:
+                out = call_gemini(model, prompt)
+                if _state["good"] != model:
+                    print("  Gemini model that works:", model)
+                    _state["good"] = model
+                return out
+            except requests.HTTPError as e:
+                code = e.response.status_code if e.response is not None else 0
+                if code in (404, 400):
+                    _state["failed"].add(model)
+                    print(f"  model {model}: HTTP {code} (unusable, skipping forever)")
+                elif code == 429:
+                    print(f"  model {model}: HTTP 429 (quota)")
+                else:
+                    print(f"  model {model}: HTTP {code}")
+            except requests.RequestException as e:
+                print(f"  model {model}: {e}")
+        if pass_num == 1:
+            print("  Gemini: pass 1 failed, waiting 5 s before pass 2")
+            time.sleep(5)
+
+    raise RuntimeError("no Gemini model answered on either pass")
 
 
 def ask_openai_compat(name, prompt):
-    """Backup AI through an OpenAI-compatible API (GitHub Models, DeepSeek, Groq, ...)."""
+    """One attempt per backup AI. No internal retries."""
     base_default, model_default = LLM_DEFAULTS[name]
     base = os.environ.get(f"{name}_BASE_URL", base_default).rstrip("/")
     model = os.environ.get(f"{name}_MODEL", model_default)
     key = os.environ[f"{name}_API_KEY"]
-    for attempt, pause in enumerate((0, 5)):
-        if pause:
-            time.sleep(pause)
-        r = requests.post(
-            f"{base}/chat/completions",
-            headers={"Authorization": f"Bearer {key}"},
-            json={"model": model, "messages": [{"role": "user", "content": prompt}]},
-            timeout=90,
-        )
-        if r.status_code in TRANSIENT and attempt < 1:
-            print(f"  {name} ({model}): HTTP {r.status_code}, retrying...")
-            continue
-        if r.status_code >= 400:
-            print(f"  {name} ({model}): HTTP {r.status_code} {r.text[:200]}")
-            r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"].strip()
-
+    r = requests.post(
+        f"{base}/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={"model": model, "messages": [{"role": "user", "content": prompt}]},
+        timeout=90,
+    )
+    if r.status_code >= 400:
+        print(f"  {name} ({model}): HTTP {r.status_code}")
+        r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"].strip()
 
 def (title, text):
     """Returns (headline, body). Raises RewriteFailed if AI is configured but all failed."""
@@ -326,9 +321,10 @@ def (title, text):
                 print(f"  {name}: answer in unexpected format")
             except Exception as e:
                 print(f"  {name} failed:", e)
-        if REQUIRE_REWRITE:
+                if REQUIRE_REWRITE:
             raise RewriteFailed("all AI engines failed")
-    return "⚽ " + title, text[:500]
+        return None, None  # ← ИИ не сработал, не публикуем
+    return None, None  # ← нет AI-движков, тоже не публикуем
 
 
 def build_caption(head, body, limit=1024):
