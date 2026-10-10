@@ -472,7 +472,7 @@ def main():
             continue
         if baseline or not is_football(it) or is_announcement(it):
             seen.append(k); seen_set.add(k)
-                continue
+            continue
         candidates.append((k, it))
 
     if ok_feeds == 0:
