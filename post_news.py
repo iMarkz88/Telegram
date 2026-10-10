@@ -544,7 +544,7 @@ def main():
                 seen.append(k); seen_set.add(k)
                 continue
 
-        while True:
+         while True:
                 try:
                     head, body = rewrite(it["title"], text or it["title"])
                     if not head or not body:
