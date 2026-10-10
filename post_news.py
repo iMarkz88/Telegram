@@ -22,7 +22,7 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 # if Gemini fails. Example defaults: LLM2 = GitHub Models, LLM3 = DeepSeek.
 LLM_DEFAULTS = {
     "LLM2": ("https://models.github.ai/inference", "openai/gpt-4o-mini"),
-    "LLM3": ("https://api.deepseek.com", "deepseek-chat"),
+    "LLM3": ("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
 }
 # true = never publish an un-rewritten short post; wait and retry on the next run instead.
 REQUIRE_REWRITE = os.environ.get("REQUIRE_REWRITE", "true").lower() == "true"
