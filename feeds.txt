@@ -1,5 +1,4 @@
 # Адреса RSS-лент, по одному в строке. Строки с # игнорируются.
 # Чтобы проверить, какие пускают GitHub: Actions -> "Check feeds" -> Run workflow.
 # Ниже адреса-догадки, они могут не существовать. Проверьте и оставьте рабочие.
-https://www.ua-football.com/rss/all.xml
-"/rss/all.xml
+https://rss.ua.tribuna.com/uk/football/feed.xml
