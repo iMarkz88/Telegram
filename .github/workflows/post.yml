@@ -43,6 +43,9 @@ jobs:
           GEMINI_MODEL: "gemini-3.5-flash"
           LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
           LLM2_MODEL: "openai/gpt-4o-mini"
+          LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
+          LLM3_MODEL: "deepseek-chat"
+          LLM3_BASE_URL: "https://api.deepseek.com"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           DIGEST_TIME: "09:00"
           DIGEST_ITEMS: "12"
@@ -61,6 +64,9 @@ jobs:
           GEMINI_MODEL: "gemini-3.5-flash"
           LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
           LLM2_MODEL: "openai/gpt-4o-mini"
+          LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
+          LLM3_MODEL: "deepseek-chat"
+          LLM3_BASE_URL: "https://api.deepseek.com"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           QUIZ_TIME: "19:30"
           QUIZZES_PER_DAY: "6"
@@ -80,6 +86,9 @@ jobs:
           GEMINI_MODEL: "gemini-3.5-flash"
           LLM2_API_KEY: ${{ secrets.GITHUB_TOKEN }}
           LLM2_MODEL: "openai/gpt-4o-mini"
+          LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
+          LLM3_MODEL: "deepseek-chat"
+          LLM3_BASE_URL: "https://api.deepseek.com"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           USE_SOURCE_IMAGE: "true"
           MAX_PER_RUN: "3"
