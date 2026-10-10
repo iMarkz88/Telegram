@@ -544,13 +544,13 @@ def main():
                 seen.append(k); seen_set.add(k)
                 continue
 
-         while True:
-                try:
-                    head, body = rewrite(it["title"], text or it["title"])
-                    if not head or not body:
-                        raise RewriteFailed("empty rewrite")
-                    break
-                except RewriteFailed:
+        while True:
+            try:
+                head, body = rewrite(it["title"], text or it["title"])
+                if not head or not body:
+                    raise RewriteFailed("empty rewrite")
+                 break
+        except RewriteFailed:
                     ...
             send(build_caption(head, body), image if USE_SOURCE_IMAGE else "")
             seen.append(k); seen_set.add(k)
