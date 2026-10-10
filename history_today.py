@@ -229,7 +229,7 @@ def format_with_ai(items, run_start):
     payload = [{"id": i, "type": it["kind"], "year": it["year"], "name": it["name"],
                 "description": it["desc"], "text": it["text"], "ukrainian": it["ua"]}
                for i, it in enumerate(items)]
-prompt = (
+    prompt = (
         "Ти редактор українського футбольного Telegram-каналу. Нижче перевірені факти з "
         "Вікіпедії та Вікіданих. Для кожного напиши ОДИН змістовний рядок українською, БЕЗ року на початку.\n"
         "Правила:\n"
