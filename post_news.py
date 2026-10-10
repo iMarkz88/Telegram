@@ -169,9 +169,15 @@ def fetch_article(url):
     soup = BeautifulSoup(r.text, "html.parser")
     tag = soup.find("meta", property="og:image")
     image = tag["content"].strip() if tag and tag.get("content") else ""
-    box = soup.find("article") or soup
+    box = (
+        soup.find("article")
+        or soup.find("div", class_=re.compile("article|content|text|body", re.I))
+        or soup.find("div", itemprop="articleBody")
+        or soup
+    )
     paras = [p.get_text(" ", strip=True) for p in box.find_all("p")]
-    return "\n".join(p for p in paras if len(p) > 50)[:4000], image
+    text = "\n".join(p for p in paras if len(p) > 80)
+    return text[:4000], image
 
 
 _state = {"cands": None, "good": "", "failed": set()}
@@ -311,6 +317,13 @@ def rewrite(title, text):
         "- ПЕРЕКЛАДАТИ іноземні назви клубів та імена кирилицею: "
         "Al Fateh club stadium, Marino Pusic, Al-Ahli — залишай ЛАТИНКОЮ;\n"
         "- додавати посилання, згадки джерела, Markdown.\n\n"
+        "УНИКАЙ ВОДЫ:\n"
+        "- НЕ пиши фразы вида «проаналізуємо», «розповімо», «покажемо», "
+        "«оцінимо», «розглянемо», «пропонуємо» — це анонси, а не новини;\n"
+        "- якщо в оригіналі немає конкретних фактів (цифр, імен, результатів), "
+        "а тільки загальні слова — напиши коротко по суті;\n"
+        "- НЕ додавай речень «оцінка базується на…», «дані взяті з…» — "
+        "це службова інформація, а не новина.\n\n"
         "МОВА:\n"
         "- українська; іноземні назви — латиниця; українські назви — українською "
         "(Шахтар, Динамо Київ, Артем Бондаренко);\n"
@@ -453,14 +466,14 @@ def main():
         print(f"Feed ok: {url} ({len(items)} items)")
         baseline = first_run or url not in known_feeds  # do not flood on first sight
         known_feeds.add(url)
-        for it in items:
-            k = item_key(it)
-            if k in seen_set:
+    for it in items:
+        k = item_key(it)
+        if k in seen_set:
+            continue
+        if baseline or not is_football(it) or is_announcement(it):
+            seen.append(k); seen_set.add(k)
                 continue
-            if baseline or not is_football(it):
-                seen.append(k); seen_set.add(k)
-                continue
-            candidates.append((k, it))
+        candidates.append((k, it))
 
     if ok_feeds == 0:
         sys.exit("No feed could be read - run 'Check feeds' to see which ones work.")
@@ -506,11 +519,12 @@ def main():
         print("Processing:", it["title"])
         try:
             text = to_text(it["content"]) or to_text(it["summary"])
-            image = it["image"]
-            if FETCH_ARTICLE:
-                full, og = fetch_article(it["link"])
-                if len(full) > len(text):
-                    text = full
+            has_numbers = bool(re.search(r"\d", text))
+            has_names = bool(re.search(r"[A-ZА-ЯІЇЄ][a-zа-яіїє]{2,}", text))
+            if not (has_numbers and has_names):
+                print(f"  Drop (no concrete facts): {it['title'][:60]}")
+                seen.append(k); seen_set.add(k)
+                continue
                 image = image or og
             while True:
                 try:
