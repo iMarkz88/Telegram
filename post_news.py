@@ -527,16 +527,24 @@ def main():
         attempts += 1
         item_start = now_ts()
         print("Processing:", it["title"])
-        try:
-            text = to_text(it["content"]) or to_text(it["summary"])
+     try:
+         text = to_text(it["content"]) or to_text(it["summary"])
+         image = it["image"]
+         if FETCH_ARTICLE:
+             full, og = fetch_article(it["link"])
+             if len(full) > 200:
+                 text = full
+             image = image or og
+
             has_numbers = bool(re.search(r"\d", text))
             has_names = bool(re.search(r"[A-ZА-ЯІЇЄ][a-zа-яіїє]{2,}", text))
-            if not (has_numbers and has_names):
+            has_quotes = bool(re.search(r"[«»\"']", text))
+            if not (has_numbers or has_names or has_quotes):
                 print(f"  Drop (no concrete facts): {it['title'][:60]}")
                 seen.append(k); seen_set.add(k)
                 continue
-                image = image or og
-            while True:
+
+        while True:
                 try:
                     head, body = rewrite(it["title"], text or it["title"])
                     if not head or not body:
