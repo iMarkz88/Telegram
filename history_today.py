@@ -132,6 +132,7 @@ def wikipedia_feed(api_kind, month, day):
         r = requests.get(url, headers=WIKI_HEADERS, timeout=30)
         r.raise_for_status()
         entries = r.json().get(api_kind, [])
+        print(f"  [DEBUG] Wikipedia feed ({api_kind}): {len(entries)} raw entries")
     except Exception as e:
         print(f"  Wikipedia feed ({api_kind}) failed: {e}")
         return []
@@ -151,6 +152,7 @@ def wikipedia_feed(api_kind, month, day):
             ua = bool(re.search(r"Ukrain", text))
         out.append({"kind": kind, "year": year, "qid": qid, "name": name, "desc": desc,
                     "score": 0, "ua": ua, "text": text if kind == "event" else ""})
+        print(f"  [DEBUG] Wikipedia feed ({api_kind}): {len(out)} football entries after filter")
     return out
 
 
@@ -189,7 +191,7 @@ def select(items, total):
     by_score = lambda xs: sorted(xs, key=lambda i: -i["score"])
     people = [i for i in items if i["kind"] in ("birth", "death")]
     take(by_score([i for i in people if i["ua"]]), 2)
-    take([i for i in items if i["kind"] == "event"], 5)
+    take([i for i in items if i["kind"] == "event"], 7)
     take(by_score([i for i in people if i["kind"] == "birth"]), 5 - sum(c["kind"] == "birth" for c in chosen) + 0)
     take(by_score([i for i in people if i["kind"] == "death"]), 3 - sum(c["kind"] == "death" for c in chosen))
     take(by_score([i for i in items if i not in chosen]), total)  # fill the rest
@@ -204,7 +206,7 @@ def numbers(s):
 
 def line_ok(item, text):
     src = numbers(f"{item['year']} {item['text']} {item['desc']} {item['name']}")
-    if not (12 <= len(text) <= 330) or not numbers(text) <= src:
+    if not (12 <= len(text) <= 500) or not numbers(text) <= src:
         return False
     low = text.lower()
     if item["kind"] == "birth" and "народив" not in low:
@@ -229,23 +231,24 @@ def format_with_ai(items, run_start):
                for i, it in enumerate(items)]
     prompt = (
         "Ти редактор українського футбольного Telegram-каналу. Нижче перевірені факти з "
-        "Вікіпедії та Вікіданих. Для кожного напиши ОДИН короткий рядок українською, БЕЗ року на початку.\n"
+        "Вікіпедії та Вікіданих. Для кожного напиши ОДИН змістовний рядок українською, БЕЗ року на початку.\n"
         "Правила:\n"
         "- використовуй ТІЛЬКИ дані з наведеного запису; нічого не додавай і не вигадуй; "
         "не змінюй і не додавай жодних чисел, рахунків, назв, дат;\n"
-        "- для type=birth почни з «народився» («народилася»), для type=death з «помер» («померла»), "
-        "далі ім'я та коротко хто це за описом (національність, футболіст/тренер); "
-        "для type=event коротко перекажи подію;\n"
+        "- **для type=event**: розкажи подію ДЕТАЛЬНО — 2-3 речення: що сталося, де, чому важливо. "
+        "Приклад: «цього дня 1896 року відбувся перший футбольний матч на стадіоні Craven Cottage у Лондоні. "
+        "Згодом він став домашньою ареною «Фулгема» та однією з історичних футбольних локацій Англії.»\n"
+        "- **для type=birth**: почни з «народився» («народилася»), далі ім'я, хто це за описом, "
+        "і додай 1 речення контексту — чим відомий, за який клуб грав, які досягнення (ТІЛЬКИ якщо це є в даних). "
+        "Приклад: «Петр Жеков (Болгарія) — один із найвидатніших бомбардирів болгарського футболу. "
+        "Він забив 253 голи в чемпіонаті Болгарії та здобув європейську «Золоту бутсу» 1969 року.»\n"
+        "- **для type=death**: почни з «помер» («померла»), далі ім'я, хто це, і коротко — "
+        "чим відомий (ТІЛЬКИ з даних);\n"
         "- **КРИТИЧНО ВАЖЛИВО ПРО ІМЕНА ТА НАЗВИ:**\n"
-        "  * **Іноземні імена, прізвища, назви клубів, стадіонів та країн** (якщо вони не є українськими) "
-        "залишай **ЛАТИНКОЮ** точно так, як у вхідних даних. "
-        "НЕ перекладай, НЕ транслітеруй їх кирилицею. "
-        "Приклади: `Zvonimir Boban`, `AC Milan`, `Real Madrid`, `Wembley`, `Brazil`.\n"
-        "  * **Українські назви** (клуби, імена, стадіони) пиши **УКРАЇНСЬКОЮ** мовою, "
-        "використовуючи літери українського алфавіту (ї, і, є, ґ). "
-        "Приклади: `Динамо Київ`, `Шахтар`, `Андрій Шевченко`, `Олімпійський`.\n"
-        "  * **Категорично заборонено** використовувати російські літери (ы, э, ё, ъ) або "
-        "писати іноземні назви кирилицею (наприклад, `Реал Мадрид` замість `Real Madrid`).\n"
+        "  * Іноземні імена, прізвища, назви клубів, стадіонів залишай **ЛАТИНКОЮ** "
+        "(Real Madrid, Zvonimir Boban, Wembley, Craven Cottage). НЕ перекладай і НЕ транслітеруй кирилицею.\n"
+        "  * Українські назви пиши **УКРАЇНСЬКОЮ** (Динамо Київ, Андрій Шевченко, Олімпійський).\n"
+        "  * Заборонено використовувати російські літери (ы, э, ё, ъ).\n"
         "- без оцінок, епітетів, емодзі, Markdown і посилань.\n"
         'Відповідай ЛИШЕ JSON: {"lines": [{"id": 0, "text": "..."}, ...]} (id з вхідних даних).\n\n'
         + json.dumps(payload, ensure_ascii=False)
