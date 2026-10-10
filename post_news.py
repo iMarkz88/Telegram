@@ -48,10 +48,8 @@ STATE_FILE = Path("posted.json")
 FEEDS_FILE = Path("feeds.txt")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,"
-              "image/webp,image/apng,*/*;q=0.8",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept-Encoding": "gzip, deflate, br",
     "Referer": "https://sport.ua/",
@@ -62,6 +60,9 @@ HEADERS = {
     "Sec-Fetch-Mode": "navigate",
     "Sec-Fetch-Site": "same-origin",
     "Sec-Fetch-User": "?1",
+    "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
     "Cache-Control": "max-age=0",
 }
 
@@ -156,6 +157,10 @@ def fetch_feed(url):
     return parse_feed(r.content)
 
 
+_session = requests.Session()
+_session.headers.update(HEADERS)
+
+
 def is_football(item):
     if SKIP_TITLE_RE.search(item["title"]):
         return False
@@ -180,24 +185,33 @@ def item_key(item):
 
 
 def fetch_article(url):
-    """Best effort: full text and og:image. Returns ("", "") if the site refuses."""
+    """Сначала заходим на главную, чтобы получить cookies, потом на статью."""
     try:
-        r = requests.get(url, headers=HEADERS, timeout=20)
+        # Если cookies ещё нет — получаем их с главной страницы
+        if not _session.cookies:
+            print("  fetching cookies from sport.ua home...")
+            _session.get("https://sport.ua/", timeout=15)
+            print(f"  got {len(_session.cookies)} cookie(s)")
+        r = _session.get(url, timeout=20)
         r.raise_for_status()
     except Exception as e:
         print("  article not available:", e)
         return "", ""
+
     soup = BeautifulSoup(r.text, "html.parser")
     tag = soup.find("meta", property="og:image")
     image = tag["content"].strip() if tag and tag.get("content") else ""
+
     box = (
         soup.find("article")
-        or soup.find("div", class_=re.compile("article|content|text|body", re.I))
+        or soup.find("div", class_=re.compile(r"s-content|article-body|article__body|content__body|news-text", re.I))
         or soup.find("div", itemprop="articleBody")
+        or soup.find("div", class_=re.compile(r"content|text|body", re.I))
         or soup
     )
     paras = [p.get_text(" ", strip=True) for p in box.find_all("p")]
-    text = "\n".join(p for p in paras if len(p) > 80)
+    text = "\n".join(p for p in paras if len(p) > 40)
+    print(f"  fetch_article: {len(text)} chars from {url[:60]}")
     return text[:4000], image
 
 
