@@ -504,7 +504,7 @@ def main():
                 if len(full) > len(text):
                     text = full
                 image = image or og
-                       while True:
+            while True:
                 try:
                     head, body = rewrite(it["title"], text or it["title"])
                     if not head or not body:
