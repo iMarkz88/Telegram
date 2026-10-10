@@ -305,9 +305,23 @@ def prepare(now, run_start):
 
 # ------------------------------------------------------------------ publishing & state
 
-def send_message(text):
+DIGEST_IMAGE = os.environ.get("DIGEST_IMAGE", "Цього дня в історії футбола.jpg")  # имя файла в репозитории
+
+def send_message(text, image=None):
+    api = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}"
+    if image and os.path.exists(image):
+        with open(image, "rb") as f:
+            r = requests.post(
+                f"{api}/sendPhoto",
+                data={"chat_id": CHANNEL, "caption": text, "parse_mode": "HTML"},
+                files={"photo": f},
+                timeout=60,
+            )
+        if r.ok:
+            return
+        print("  sendPhoto failed, sending text only:", r.text[:200])
     r = requests.post(
-        f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage",
+        f"{api}/sendMessage",
         data={"chat_id": CHANNEL, "text": text, "parse_mode": "HTML",
               "disable_web_page_preview": True},
         timeout=60,
@@ -319,7 +333,7 @@ def send_message(text):
 
 def publish(messages):
     for n, m in enumerate(messages):
-        send_message(m)
+        send_message(m, image=DIGEST_IMAGE if n == 0 else None)
         if n < len(messages) - 1:
             time.sleep(2)
 
