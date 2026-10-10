@@ -495,17 +495,14 @@ def main():
                 if len(full) > len(text):
                     text = full
                 image = image or og
-            while True:  # retry the AI until it works or this item's retry window is over
+                       while True:
                 try:
                     head, body = rewrite(it["title"], text or it["title"])
+                    if not head or not body:
+                        raise RewriteFailed("empty rewrite")
                     break
                 except RewriteFailed:
-                    left = RETRY_WINDOW_MIN * 60 - (now_ts() - item_start)
-                    if left <= RETRY_PAUSE_SEC:
-                        raise
-                    print(f"  AI unavailable, trying again in {RETRY_PAUSE_SEC:.0f} s "
-                          f"({left / 60:.1f} min of retry window left)")
-                    time.sleep(RETRY_PAUSE_SEC)
+                    ...
             send(build_caption(head, body), image if USE_SOURCE_IMAGE else "")
             seen.append(k); seen_set.add(k)
             last_post = now_ts()
