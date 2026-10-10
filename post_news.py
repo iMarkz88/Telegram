@@ -501,14 +501,14 @@ def main():
         print(f"Feed ok: {url} ({len(items)} items)")
         baseline = first_run or url not in known_feeds  # do not flood on first sight
         known_feeds.add(url)
-    for it in items:
-        k = item_key(it)
-        if k in seen_set:
-            continue
-        if baseline or not is_football(it) or is_announcement(it):
-            seen.append(k); seen_set.add(k)
-            continue
-        candidates.append((k, it))
+        for it in items:
+            k = item_key(it)
+            if k in seen_set:
+                continue
+            if baseline or not is_football(it) or is_announcement(it):
+                seen.append(k); seen_set.add(k)
+                continue
+            candidates.append((k, it))
 
     if ok_feeds == 0:
         sys.exit("No feed could be read - run 'Check feeds' to see which ones work.")
