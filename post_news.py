@@ -179,7 +179,7 @@ GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
 TRANSIENT = (429, 500, 502, 503, 504)
 
 
-class RewriteFailed(Exception):
+class Failed(Exception):
     pass
 
 
@@ -277,7 +277,7 @@ def ask_openai_compat(name, prompt):
         return r.json()["choices"][0]["message"]["content"].strip()
 
 
-def rewrite(title, text):
+def (title, text):
     """Returns (headline, body). Raises RewriteFailed if AI is configured but all failed."""
     engines = []
     if GEMINI_KEY:
@@ -286,11 +286,9 @@ def rewrite(title, text):
         if os.environ.get(f"{n}_API_KEY"):
             engines.append((n, lambda p, n=n: ask_openai_compat(n, p)))
     if engines:
-        prompt = (
+               prompt = (
             "Ти редактор українського футбольного Telegram-каналу «football 90+». "
             "Твоє завдання — перефразувати новину українською мовою, ЗБЕРІГАЮЧИ ВСІ ФАКТИ.\n\n"
-            "на початку, далі порожній рядок і текст.\n\n"
-            f"Заголовок: {title}\n\nТекст:\n{text}"
             "ЩО МОЖНА РОБИТИ:\n"
             "- перефразовувати речення своїми словами (синоніми, інший порядок слів);\n"
             "- скорочувати текст, об'єднувати речення, прибирати другорядні деталі;\n"
@@ -317,8 +315,7 @@ def rewrite(title, text):
             "Далі порожній рядок і текст новини.\n\n"
             f"ОРИГІНАЛЬНИЙ ЗАГОЛОВОК: {title}\n\n"
             f"ОРИГІНАЛЬНИЙ ТЕКСТ:\n{text}"
-
-        )   
+        )
         for name, fn in engines:
             try:
                 out = fn(prompt)
