@@ -10,6 +10,7 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import requests
@@ -22,7 +23,7 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 # if Gemini fails. Example defaults: LLM2 = GitHub Models, LLM3 = DeepSeek.
 LLM_DEFAULTS = {
     "LLM2": ("https://models.github.ai/inference", "openai/gpt-4o-mini"),
-    "LLM3": ("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
+    "LLM3": ("https://api.deepseek.com", "deepseek-chat"),
 }
 # true = never publish an un-rewritten short post; wait and retry on the next run instead.
 REQUIRE_REWRITE = os.environ.get("REQUIRE_REWRITE", "true").lower() == "true"
@@ -48,22 +49,10 @@ STATE_FILE = Path("posted.json")
 FEEDS_FILE = Path("feeds.txt")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-    "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://sport.ua/",
-    "DNT": "1",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-User": "?1",
-    "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": '"Windows"',
-    "Cache-Control": "max-age=0",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+    "Accept-Language": "uk-UA,uk;q=0.9",
 }
 
 # Words that mark a news item as football (lowercase, matched as substrings).
@@ -157,10 +146,6 @@ def fetch_feed(url):
     return parse_feed(r.content)
 
 
-_session = requests.Session()
-_session.headers.update(HEADERS)
-
-
 def is_football(item):
     if SKIP_TITLE_RE.search(item["title"]):
         return False
@@ -168,59 +153,54 @@ def is_football(item):
     if any(w in blob for w in SKIP_WORDS):
         return False
     return (not FOOTBALL_ONLY) or any(w in blob for w in FOOTBALL_WORDS)
-ANNOUNCE_WORDS = (
-    "проаналізуємо", "розповімо", "покажемо", "дізнаєтесь", "читайте",
-    "дивитись", "дивитися", "у матеріалі", "у статті", "далі буде",
-    "пропонуємо", "представляємо", "огляд", "анонс",
-)
 
-
-def is_announcement(item):
-    """Отсеивает анонсы статей, а не сами новости."""
-    blob = (item["title"] + " " + to_text(item["summary"])).lower()
-    return any(w in blob for w in ANNOUNCE_WORDS)
 
 def item_key(item):
     return hashlib.sha1(item["link"].encode()).hexdigest()[:16]
 
 
+ARTICLE_HEADERS = {
+    "User-Agent": HEADERS["User-Agent"],
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "uk-UA,uk;q=0.9",
+}
+_blocked_hosts = set()
+
+
 def fetch_article(url):
-    """Сначала заходим на главную, чтобы получить cookies, потом на статью."""
+    """Best effort: full text and og:image. Returns ("", "") if the site refuses.
+    A site that answers 401/403/429 is blocking this server: it is not asked again in this run,
+    the RSS text is used instead (extra requests only make such a block stricter)."""
+    host = urlparse(url).netloc
+    if host in _blocked_hosts:
+        return "", ""
     try:
-        # Если cookies ещё нет — получаем их с главной страницы
-        if not _session.cookies:
-            print("  fetching cookies from sport.ua home...")
-            _session.get("https://sport.ua/", timeout=15)
-            print(f"  got {len(_session.cookies)} cookie(s)")
-        r = _session.get(url, timeout=20)
+        r = requests.get(url, headers=ARTICLE_HEADERS, timeout=20)
+        if r.status_code in (401, 403, 429):
+            _blocked_hosts.add(host)
+            print(f"  {host} blocks article pages for this server (HTTP {r.status_code}) - "
+                  f"using the RSS text for the rest of this run")
+            return "", ""
         r.raise_for_status()
     except Exception as e:
         print("  article not available:", e)
         return "", ""
-
     soup = BeautifulSoup(r.text, "html.parser")
     tag = soup.find("meta", property="og:image")
     image = tag["content"].strip() if tag and tag.get("content") else ""
-
-    box = (
-        soup.find("article")
-        or soup.find("div", class_=re.compile(r"s-content|article-body|article__body|content__body|news-text", re.I))
-        or soup.find("div", itemprop="articleBody")
-        or soup.find("div", class_=re.compile(r"content|text|body", re.I))
-        or soup
-    )
+    box = soup.find("article") or soup
     paras = [p.get_text(" ", strip=True) for p in box.find_all("p")]
-    text = "\n".join(p for p in paras if len(p) > 40)
-    print(f"  fetch_article: {len(text)} chars from {url[:60]}")
-    return text[:4000], image
+    return "\n".join(p for p in paras if len(p) > 50)[:4000], image
 
 
-_state = {"cands": None, "good": "", "failed": set()}
+_state = {"cands": None, "good": "", "failed": set(), "quota": set()}
+# Max seconds one ask_gemini() call may spend going through the models.
+ASK_GEMINI_BUDGET_SEC = float(os.environ.get("ASK_GEMINI_BUDGET_SEC", "100"))
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
 TRANSIENT = (429, 500, 502, 503, 504)
 
 
-class Failed(Exception):
+class RewriteFailed(Exception):
     pass
 
 
@@ -246,101 +226,104 @@ def list_candidates():
 
 
 def call_gemini(model, prompt):
-    """One attempt per model. No internal retries — the outer loop handles them."""
-    r = requests.post(
-        f"{GEMINI_API}/models/{model}:generateContent",
-        params={"key": GEMINI_KEY},
-        json={"contents": [{"parts": [{"text": prompt}]}]},
-        timeout=45,
-    )
-    if r.status_code >= 400:
-        print(f"  model {model}: HTTP {r.status_code}")
-        r.raise_for_status()
-    return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    """One model. Overload/server errors (5xx) get quick retries; a quota error (429) does not:
+    waiting 10 seconds never gives back a daily quota."""
+    for attempt, pause in enumerate((0, 4, 10)):
+        if pause:
+            time.sleep(pause)
+        r = requests.post(
+            f"{GEMINI_API}/models/{model}:generateContent",
+            params={"key": GEMINI_KEY},
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=45,
+        )
+        if r.status_code in (500, 502, 503, 504) and attempt < 2:
+            print(f"  model {model}: HTTP {r.status_code}, retrying...")
+            continue
+        if r.status_code >= 400:
+            print(f"  model {model}: HTTP {r.status_code} {r.text[:120]}")
+            r.raise_for_status()
+        return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
 def ask_gemini(prompt):
-    """Two passes over all models, one attempt per model per pass."""
-    order, tried_models = [], set()
+    """Goes through ALL usable models (the last working one first) until one answers.
+    Models with a 404/400 or an exhausted quota are skipped without waiting."""
+    order, listed = [], set()
     for m in [_state["good"], GEMINI_MODEL] + list_candidates():
-        if m and m not in tried_models:
-            tried_models.add(m)
+        if m and m not in listed:
+            listed.add(m)
             order.append(m)
-
-    for pass_num in (1, 2):
-        print(f"  Gemini pass {pass_num}/2 over {len(order)} model(s)")
-        for model in order:
-            if model in _state["failed"]:
-                continue
-            try:
-                out = call_gemini(model, prompt)
-                if _state["good"] != model:
-                    print("  Gemini model that works:", model)
-                    _state["good"] = model
-                return out
-            except requests.HTTPError as e:
-                code = e.response.status_code if e.response is not None else 0
-                if code in (404, 400):
-                    _state["failed"].add(model)
-                    print(f"  model {model}: HTTP {code} (unusable, skipping forever)")
-                elif code == 429:
-                    print(f"  model {model}: HTTP 429 (quota)")
-                else:
-                    print(f"  model {model}: HTTP {code}")
-            except requests.RequestException as e:
-                print(f"  model {model}: {e}")
-        if pass_num == 1:
-            print("  Gemini: pass 1 failed, waiting 5 s before pass 2")
-            time.sleep(5)
-
-    raise RuntimeError("no Gemini model answered on either pass")
+    deadline = time.time() + ASK_GEMINI_BUDGET_SEC
+    problems = {}
+    for model in order:
+        if model in _state["failed"] or model in _state["quota"]:
+            continue
+        if time.time() > deadline:
+            break
+        try:
+            out = call_gemini(model, prompt)
+            if _state["good"] != model:
+                print("  Gemini model that works:", model)
+                _state["good"] = model
+            return out
+        except requests.HTTPError as e:
+            code = e.response.status_code if e.response is not None else 0
+            problems[f"HTTP {code}"] = problems.get(f"HTTP {code}", 0) + 1
+            if code in (404, 400):
+                _state["failed"].add(model)  # permanently unusable for this key
+            elif code == 429:
+                _state["quota"].add(model)  # quota used up: do not ask again in this run
+        except requests.RequestException as e:
+            problems["network"] = problems.get("network", 0) + 1
+            print(f"  model {model}: {e}")
+    summary = ", ".join(f"{k} x{v}" for k, v in problems.items()) or "no model available"
+    raise RuntimeError(f"no Gemini model answered ({summary})")
 
 
 def ask_openai_compat(name, prompt):
-    """One attempt per backup AI. No internal retries."""
+    """Backup AI through an OpenAI-compatible API (GitHub Models, DeepSeek, Groq, ...)."""
     base_default, model_default = LLM_DEFAULTS[name]
     base = os.environ.get(f"{name}_BASE_URL", base_default).rstrip("/")
     model = os.environ.get(f"{name}_MODEL", model_default)
     key = os.environ[f"{name}_API_KEY"]
-    r = requests.post(
-        f"{base}/chat/completions",
-        headers={"Authorization": f"Bearer {key}"},
-        json={"model": model, "messages": [{"role": "user", "content": prompt}]},
-        timeout=90,
-    )
-    if r.status_code >= 400:
-        print(f"  {name} ({model}): HTTP {r.status_code}")
-        r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"].strip()
+    for attempt, pause in enumerate((0, 5)):
+        if pause:
+            time.sleep(pause)
+        r = requests.post(
+            f"{base}/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={"model": model, "messages": [{"role": "user", "content": prompt}]},
+            timeout=90,
+        )
+        if r.status_code in TRANSIENT and attempt < 1:
+            print(f"  {name} ({model}): HTTP {r.status_code}, retrying...")
+            continue
+        if r.status_code >= 400:
+            print(f"  {name} ({model}): HTTP {r.status_code} {r.text[:200]}")
+            r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"].strip()
+
 
 def rewrite(title, text):
-    """Returns (headline, body) or (None, None) if all AI engines fail."""
+    """Returns (headline, body). Raises RewriteFailed if AI is configured but all engines failed."""
     engines = []
     if GEMINI_KEY:
         engines.append(("Gemini", ask_gemini))
     for n in ("LLM2", "LLM3"):
         if os.environ.get(f"{n}_API_KEY"):
             engines.append((n, lambda p, n=n: ask_openai_compat(n, p)))
-
     if not engines:
-        return None, None  # нет AI-движков — не публикуем
+        return "⚽ " + title, text[:500]
 
     prompt = (
         "Ти редактор українського футбольного Telegram-каналу «football 90+». "
         "Твоє завдання — перефразувати новину українською мовою, ЗБЕРІГАЮЧИ ВСІ ФАКТИ.\n\n"
         "ЩО МОЖНА РОБИТИ:\n"
         "- перефразовувати речення своїми словами (синоніми, інший порядок слів);\n"
-        "- об'єднувати речення, прибирати ДРУГОРЯДНІ деталі (описи, повтори, "
-        "загальні фрази), але НЕ факти, НЕ імена, НЕ числа, НЕ назви;\n"
+        "- скорочувати текст, об'єднувати речення, прибирати другорядні деталі;\n"
         "- змінювати порядок речень для кращого звучання;\n"
         "- додавати ОДИН доречний емодзі на початку заголовка.\n\n"
-        "ОБОВ'ЯЗКОВО ЗБЕРІГАЙ (це НЕ другорядні деталі):\n"
-        "- УСІ імена людей: тренерів, гравців, президентів клубів "
-        "(«Сергій Нагорняк», «Валерій Лучкевич», «Кирило Ковалець», «Джон Себеріо»); "
-        "НЕ узагальнюй до «тренер», «гравець», «захисник»;\n"
-        "- УСІ назви клубів, стадіонів, міст, країн;\n"
-        "- УСІ числа, дати, терміни, рахунки;\n"
-        "- конкретні факти: травми, терміни повернення.\n\n"
         "ЩО КАТЕГОРИЧНО ЗАБОРОНЕНО:\n"
         "- ДОДАВАТИ будь-які факти, числа, дати, назви, причини, оцінки, яких немає в оригіналі. "
         "Якщо в оригіналі не сказано «травма» — не пиши «травма». Якщо не сказано «нарешті» — не пиши «нарешті»;\n"
@@ -352,13 +335,6 @@ def rewrite(title, text):
         "- ПЕРЕКЛАДАТИ іноземні назви клубів та імена кирилицею: "
         "Al Fateh club stadium, Marino Pusic, Al-Ahli — залишай ЛАТИНКОЮ;\n"
         "- додавати посилання, згадки джерела, Markdown.\n\n"
-        "УНИКАЙ ВОДЫ:\n"
-        "- НЕ пиши фразы вида «проаналізуємо», «розповімо», «покажемо», "
-        "«оцінимо», «розглянемо», «пропонуємо» — це анонси, а не новини;\n"
-        "- якщо в оригіналі немає конкретних фактів (цифр, імен, результатів), "
-        "а тільки загальні слова — напиши коротко по суті;\n"
-        "- НЕ додавай речень «оцінка базується на…», «дані взяті з…» — "
-        "це службова інформація, а не новина.\n\n"
         "МОВА:\n"
         "- українська; іноземні назви — латиниця; українські назви — українською "
         "(Шахтар, Динамо Київ, Артем Бондаренко);\n"
@@ -370,27 +346,23 @@ def rewrite(title, text):
         f"ОРИГІНАЛЬНИЙ ЗАГОЛОВОК: {title}\n\n"
         f"ОРИГІНАЛЬНИЙ ТЕКСТ:\n{text}"
     )
-
-    for pass_num in (1, 2):
-        print(f"  AI pass {pass_num}/2 over {len(engines)} engine(s)")
-        for name, fn in engines:
-            try:
-                out = fn(prompt)
-                head, _, body = out.partition("\n")
-                head = head.strip().strip("*#").strip()
-                body = body.strip()
-                if head and body:
-                    return head, body
-                print(f"  {name}: answer in unexpected format")
-            except Exception as e:
-                print(f"  {name} failed:", e)
-        if pass_num == 1:
-            print("  AI: pass 1 failed, waiting 5 s before pass 2")
-            time.sleep(5)
-
+    reasons = []
+    for name, fn in engines:
+        try:
+            out = fn(prompt)
+            head, _, body = out.partition("\n")
+            head, body = head.strip().strip("*#").strip(), body.strip()
+            if head and body:
+                return head, body
+            reasons.append(f"{name}: answer in unexpected format")
+            print(f"  {name}: answer in unexpected format")
+        except Exception as e:
+            reasons.append(f"{name}: {e}"[:200])
+            print(f"  {name} failed:", e)
     if REQUIRE_REWRITE:
-        raise RewriteFailed("all AI engines failed on both passes")
-    return None, None
+        raise RewriteFailed("all AI engines failed - " + " | ".join(reasons))
+    return "⚽ " + title, text[:500]
+
 
 def build_caption(head, body, limit=1024):
     head = re.sub(r"https?://\S+", "", head).strip()
@@ -490,7 +462,7 @@ def main():
     known_feeds = set(state["feeds"])
     last_post = float(state.get("last_post", 0))
 
-    ok_feeds, candidates = 0, []
+    ok_feeds, candidates, filtered = 0, [], []
     for url in feeds:
         try:
             items = fetch_feed(url)
@@ -505,13 +477,17 @@ def main():
             k = item_key(it)
             if k in seen_set:
                 continue
-            if baseline or not is_football(it) or is_announcement(it):
+            if baseline or not is_football(it):
                 seen.append(k); seen_set.add(k)
+                if not baseline:
+                    filtered.append(it["title"])
                 continue
             candidates.append((k, it))
 
     if ok_feeds == 0:
         sys.exit("No feed could be read - run 'Check feeds' to see which ones work.")
+    if filtered:
+        print(f"Filtered out as not football / skip-words: {len(filtered)} (e.g. {filtered[0][:60]!r})")
 
     candidates.sort(key=lambda c: c[1]["ts"])
 
@@ -557,34 +533,28 @@ def main():
             image = it["image"]
             if FETCH_ARTICLE:
                 full, og = fetch_article(it["link"])
-                if len(full) > 200:
+                if len(full) > len(text):
                     text = full
-            image = image or og
-
-            has_numbers = bool(re.search(r"\d", text))
-            has_names = bool(re.search(r"[A-ZА-ЯІЇЄ][a-zа-яіїє]{2,}", text))
-            has_quotes = bool(re.search(r"[«»\"']", text))
-            if not (has_numbers or has_names or has_quotes):
-                print(f"  Drop (no concrete facts): {it['title'][:60]}")
-                seen.append(k); seen_set.add(k)
-                continue
-
-            while True:
+                image = image or og
+            while True:  # retry the AI until it works or this item's retry window is over
                 try:
                     head, body = rewrite(it["title"], text or it["title"])
-                    if not head or not body:
-                        raise RewriteFailed("empty rewrite")
                     break
                 except RewriteFailed:
-                        ...
-                send(build_caption(head, body), image if USE_SOURCE_IMAGE else "")
-                seen.append(k); seen_set.add(k)
-                last_post = now_ts()
-                posted_now += 1
-                failed_in_row = 0
-                print("  Published.")
-                if posted_now < MAX_PER_RUN:
-                    time.sleep(2)  # be gentln posts
+                    left = RETRY_WINDOW_MIN * 60 - (now_ts() - item_start)
+                    if left <= RETRY_PAUSE_SEC:
+                        raise
+                    print(f"  AI unavailable, trying again in {RETRY_PAUSE_SEC:.0f} s "
+                          f"({left / 60:.1f} min of retry window left)")
+                    time.sleep(RETRY_PAUSE_SEC)
+            send(build_caption(head, body), image if USE_SOURCE_IMAGE else "")
+            seen.append(k); seen_set.add(k)
+            last_post = now_ts()
+            posted_now += 1
+            failed_in_row = 0
+            print("  Published.")
+            if posted_now < MAX_PER_RUN:
+                time.sleep(2)  # be gentle with Telegram between posts
         except RewriteFailed:
             failed_in_row += 1
             print("  Could not be processed now - it stays in the queue, trying the next one.")
@@ -595,7 +565,8 @@ def main():
             print("  failed, will retry next run:", e)
 
     save_state(seen, known_feeds, last_post)
-    print("Done.")
+    print(f"Done. Published this run: {posted_now}; still waiting in the queue: "
+          f"{max(0, len(queue) - posted_now)}.")
 
 
 if __name__ == "__main__":
