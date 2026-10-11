@@ -164,34 +164,79 @@ def fetch_cup_winners() -> list[dict]:
     return all_winners
 
 
+
+def fetch_ucl_uel() -> list[dict]:
+    """Переможці ЛЧ та Ліги Європи з 1990 — найчистіше джерело."""
+    out = []
+    for qid, label in [(UCL, "UCL"), (UEL, "UEL")]:
+        rows = fetch_competition_winners(qid, since=1990, label=label)
+        out.extend(rows)
+        print(f"    {label}: {len(rows)}")
+    return out
+
+
+def fetch_major_league_champions() -> list[dict]:
+    """Чемпіони тільки великих ліг. Фільтр по sitelinks, щоб відсіяти дрібні клуби."""
+    # Тільки Big-5 + Португалія, Нідерланди, Україна, Бразилія
+    major = {
+        "Q9448": "Premier League",
+        "Q15804": "Serie A",
+        "Q324867": "La Liga",
+        "Q82595": "Bundesliga",
+        "Q13394": "Ligue 1",
+        "Q167541": "Eredivisie",
+        "Q219967": "Primeira Liga",
+        "Q182994": "Ukrainian Premier League",
+        "Q831202": "Campeonato Brasileiro Série A",
+    }
+    league_values = " ".join(f"wd:{qid}" for qid in major)
+    query = f"""
+    SELECT DISTINCT ?club ?clubLabel ?year ?sl WHERE {{
+      VALUES ?league {{ {league_values} }}
+      ?season wdt:P3450 ?league .
+      ?season wdt:P1346 ?club .
+      ?season wdt:P585 ?date .
+      ?club wikibase:sitelinks ?sl .
+      FILTER(?sl >= 25)
+      BIND(YEAR(?date) AS ?year)
+      FILTER(?year >= 1990 && ?year <= 2026)
+      SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+    }}
+    ORDER BY DESC(?sl) ?year
+    LIMIT 300
+    """
+    try:
+        rows = run_sparql(query, timeout=120)
+    except Exception as e:
+        print(f"  League champions query failed: {e}")
+        return []
+    out = []
+    for b in rows:
+        qid = b["club"]["value"].rsplit("/", 1)[-1]
+        name = b.get("clubLabel", {}).get("value", "")
+        year = int(b["year"]["value"])
+        if name and not name.startswith("Q"):
+            out.append({"qid": qid, "name": name, "year": year, "source": "league"})
+    return out
+
+
 def build_club_pool() -> list[dict]:
     """
-    Збирає широкий пул:
-    - ЛЧ з 1990
-    - Ліга Європи / Кубок УЄФА з 1990
-    - чемпіони топ-ліг + Бразилія з 1990
-    - національні кубки (з 1985)
-    Пріоритет — клуби з успіхом у 1990–2008 (пік 90-х / 2000-х).
+    Пул:
+    1. Переможці ЛЧ + Ліги Європи з 1990 (основа)
+    2. Чемпіони Big-5 + Португалія/Нідерланди/Україна/Бразилія (з фільтром sitelinks)
+    Без національних кубків — вони тягнуть дрібні клуби (Shelbourne тощо).
+    Перемішування peak-era ↔ modern grands.
     """
-    print("  Fetching Champions League winners...")
-    ucl = fetch_competition_winners(UCL, since=1990, label="UCL")
-    print(f"    UCL: {len(ucl)}")
+    print("  Fetching UCL + UEL winners...")
+    euro = fetch_ucl_uel()
 
-    print("  Fetching Europa League / UEFA Cup winners...")
-    uel = fetch_competition_winners(UEL, since=1990, label="UEL")
-    print(f"    UEL: {len(uel)}")
-
-    print("  Fetching league champions (Europe + Brazil)...")
-    champs = fetch_league_champions()
+    print("  Fetching major league champions (sitelinks >= 25)...")
+    champs = fetch_major_league_champions()
     print(f"    League titles: {len(champs)}")
 
-    print("  Fetching domestic cup winners...")
-    cups = fetch_cup_winners()
-    print(f"    Cup winners: {len(cups)}")
-
-    # Групуємо по клубу
     by_club: dict[str, dict] = {}
-    for item in ucl + uel + champs + cups:
+    for item in euro + champs:
         qid = item["qid"]
         if qid not in by_club:
             by_club[qid] = {
@@ -211,33 +256,32 @@ def build_club_pool() -> list[dict]:
             c["ucl"] += 1
         elif src == "UEL":
             c["uel"] += 1
-        elif src == "league":
-            c["titles"] += 1
         else:
-            c["cups"] += 1
+            c["titles"] += 1
 
     clubs = list(by_club.values())
+
+    # Відсіюємо зовсім слабкі (0 євро + 1 титул і назва з дрібних ліг)
+    # Залишаємо всіх з UCL/UEL або з >= 2 титулів чемпіонату
+    clubs = [c for c in clubs if c["ucl"] + c["uel"] >= 1 or c["titles"] >= 2]
 
     def is_peak(c):
         return any(1990 <= y <= 2008 for y in c["years"])
 
     def is_modern_grand(c):
-        # Гранди, що активно виграють після 2012
         return any(y >= 2013 for y in c["years"]) and (c["ucl"] + c["titles"] >= 2)
 
     peak_clubs = [c for c in clubs if is_peak(c)]
     modern_clubs = [c for c in clubs if is_modern_grand(c) and c not in peak_clubs]
     other = [c for c in clubs if c not in peak_clubs and c not in modern_clubs]
 
-    # Сортуємо кожну групу за «вагою» трофеїв
     def weight(c):
-        return -(c["ucl"] * 5 + c["uel"] * 3 + c["titles"] * 2 + c["cups"])
+        return -(c["ucl"] * 5 + c["uel"] * 3 + c["titles"] * 2)
 
     peak_clubs.sort(key=weight)
     modern_clubs.sort(key=weight)
     other.sort(key=weight)
 
-    # Перемішуємо: peak → modern → peak → modern → ...
     mixed = []
     i = j = 0
     while i < len(peak_clubs) or j < len(modern_clubs):
@@ -252,9 +296,9 @@ def build_club_pool() -> list[dict]:
     print(f"  Total unique clubs in pool: {len(mixed)}")
     print(f"  Peak-era: {len(peak_clubs)}, Modern grands: {len(modern_clubs)}, Other: {len(other)}")
     print("  First 12 (mixed):")
-    for i, c in enumerate(mixed[:12]):
+    for idx, c in enumerate(mixed[:12]):
         tag = "peak" if is_peak(c) else ("grand" if is_modern_grand(c) else "other")
-        print(f"    {i+1}. {c['name']} [{tag}]")
+        print(f"    {idx+1}. {c['name']} [{tag}] UCL:{c['ucl']} UEL:{c['uel']} titles:{c['titles']}")
     return mixed
 
 
