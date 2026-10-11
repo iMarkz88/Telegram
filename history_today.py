@@ -102,10 +102,13 @@ def parse_people(bindings, kind, ukrainian):
             name = b.get("pLabel", {}).get("value", "")
             if not name or re.fullmatch(r"Q\d+", name):
                 continue
+            desc = b.get("pDescription", {}).get("value", "")
+            if desc and not re.search(r"football|soccer|футбол", desc, re.I):
+                continue
             out.append({
                 "kind": kind, "year": int(b["date"]["value"][:4]),
                 "qid": b["p"]["value"].rsplit("/", 1)[-1], "name": name,
-                "desc": b.get("pDescription", {}).get("value", ""),
+                "desc": desc,
                 "score": int(b["sl"]["value"]), "ua": ukrainian, "text": "",
             })
         except (KeyError, ValueError):
