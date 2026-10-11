@@ -13,6 +13,14 @@ on:
         description: "Опублікувати пост «Цього дня» зараз (тест)"
         type: boolean
         default: false
+      players_now:
+        description: "Опублікувати «Великі футболісти» зараз (тест)"
+        type: boolean
+        default: false
+      clubs_now:
+        description: "Опублікувати «Великі клуби» зараз (тест)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -25,7 +33,7 @@ concurrency:
 jobs:
   post:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +44,7 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      # ---------- Цього дня в історії футболу (щодня ~09:00 Київ) ----------
       - name: Run history digest
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -43,9 +52,9 @@ jobs:
           GEMINI_MODEL: "gemini-3.5-flash"
           LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
           LLM2_MODEL: "openai/gpt-4o-mini"
-          LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}         
-          LLM3_MODEL: "llama-3.3-70b-versatile"             
-          LLM3_BASE_URL: "https://api.groq.com/openai/v1"  
+          LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
+          LLM3_MODEL: "llama-3.3-70b-versatile"
+          LLM3_BASE_URL: "https://api.groq.com/openai/v1"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           DIGEST_TIME: "09:00"
           DIGEST_ITEMS: "12"
@@ -56,6 +65,47 @@ jobs:
           RETRY_PAUSE_SEC: "60"
         run: python history_today.py
 
+      # ---------- Великі футболісти (щопонеділка 13:00 Київ) ----------
+      - name: Run great players
+        if: ${{ !cancelled() }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: "gemini-3.5-flash"
+          LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
+          LLM2_MODEL: "openai/gpt-4o-mini"
+          LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
+          LLM3_MODEL: "llama-3.3-70b-versatile"
+          LLM3_BASE_URL: "https://api.groq.com/openai/v1"
+          TELEGRAM_CHANNEL: "@football_90_pluss"
+          PLAYERS_FORCE: ${{ inputs.players_now }}
+          QUIET_FROM: "21:30"
+          QUIET_TO: "07:30"
+          RETRY_WINDOW_MIN: "3"
+          RETRY_PAUSE_SEC: "60"
+        run: python great_players.py
+
+      # ---------- Великі клуби (щоп’ятниці 13:00 Київ) ----------
+      - name: Run great clubs
+        if: ${{ !cancelled() }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: "gemini-3.5-flash"
+          LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
+          LLM2_MODEL: "openai/gpt-4o-mini"
+          LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
+          LLM3_MODEL: "llama-3.3-70b-versatile"
+          LLM3_BASE_URL: "https://api.groq.com/openai/v1"
+          TELEGRAM_CHANNEL: "@football_90_pluss"
+          CLUBS_FORCE: ${{ inputs.clubs_now }}
+          QUIET_FROM: "21:30"
+          QUIET_TO: "07:30"
+          RETRY_WINDOW_MIN: "3"
+          RETRY_PAUSE_SEC: "60"
+        run: python great_clubs.py
+
+      # ---------- Вікторина (щодня ~19:30 Київ) ----------
       - name: Run quiz
         if: ${{ !cancelled() }}
         env:
@@ -64,8 +114,8 @@ jobs:
           GEMINI_MODEL: "gemini-3.5-flash"
           LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
           LLM2_MODEL: "openai/gpt-4o-mini"
-          LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}         
-          LLM3_MODEL: "llama-3.3-70b-versatile"             
+          LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
+          LLM3_MODEL: "llama-3.3-70b-versatile"
           LLM3_BASE_URL: "https://api.groq.com/openai/v1"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           QUIZ_TIME: "19:30"
@@ -78,6 +128,7 @@ jobs:
           RETRY_PAUSE_SEC: "60"
         run: python quiz.py
 
+      # ---------- Новини з RSS ----------
       - name: Run bot
         if: ${{ !cancelled() }}
         env:
@@ -86,8 +137,8 @@ jobs:
           GEMINI_MODEL: "gemini-3.5-flash"
           LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
           LLM2_MODEL: "openai/gpt-4o-mini"
-          LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}         
-          LLM3_MODEL: "llama-3.3-70b-versatile"             
+          LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
+          LLM3_MODEL: "llama-3.3-70b-versatile"
           LLM3_BASE_URL: "https://api.groq.com/openai/v1"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           USE_SOURCE_IMAGE: "true"
@@ -99,12 +150,14 @@ jobs:
           RETRY_PAUSE_SEC: "60"
         run: python post_news.py
 
+      # ---------- Збереження стану ----------
       - name: Save state
         if: ${{ !cancelled() }}
         run: |
           git config user.name "news-bot"
           git config user.email "news-bot@users.noreply.github.com"
-          for f in posted.json quiz_state.json quiz_history.jsonl digest_state.json; do
+          for f in posted.json quiz_state.json quiz_history.jsonl digest_state.json \
+                   great_players_state.json great_clubs_state.json; do
             if [ -f "$f" ]; then git add "$f"; fi
           done
           if git diff --cached --quiet; then
