@@ -5,6 +5,94 @@
   "messages": [],
   "current_qid": "",
   "current_title": "",
-  "pool_cache": [],
-  "pool_updated": ""
+  "pool_cache": [
+    {
+      "qid": "Q394474",
+      "name": "Shelbourne F.C.",
+      "years": [
+        2003,
+        2004,
+        2006
+      ],
+      "ucl": 0,
+      "uel": 0,
+      "titles": 3,
+      "cups": 0
+    },
+    {
+      "qid": "Q338557",
+      "name": "Dundalk F.C.",
+      "years": [
+        2014,
+        2015,
+        2016,
+        2018,
+        2019
+      ],
+      "ucl": 0,
+      "uel": 0,
+      "titles": 5,
+      "cups": 0
+    },
+    {
+      "qid": "Q212708",
+      "name": "Bohemian F.C.",
+      "years": [
+        2008,
+        2009
+      ],
+      "ucl": 0,
+      "uel": 0,
+      "titles": 2,
+      "cups": 0
+    },
+    {
+      "qid": "Q203976",
+      "name": "Shamrock Rovers F.C.",
+      "years": [
+        2010,
+        2011,
+        2025
+      ],
+      "ucl": 0,
+      "uel": 0,
+      "titles": 3,
+      "cups": 0
+    },
+    {
+      "qid": "Q932284",
+      "name": "Cork City F.C.",
+      "years": [
+        2005,
+        2017
+      ],
+      "ucl": 0,
+      "uel": 0,
+      "titles": 2,
+      "cups": 0
+    },
+    {
+      "qid": "Q173009",
+      "name": "FK Crvena zvezda",
+      "years": [
+        1990
+      ],
+      "ucl": 0,
+      "uel": 1,
+      "titles": 0,
+      "cups": 0
+    },
+    {
+      "qid": "Q7156",
+      "name": "FC Barcelona",
+      "years": [
+        1991
+      ],
+      "ucl": 0,
+      "uel": 1,
+      "titles": 0,
+      "cups": 0
+    }
+  ],
+  "pool_updated": "2026-10-11"
 }
