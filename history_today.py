@@ -4,6 +4,8 @@ Facts come from Wikidata (footballers' and managers' births/deaths) and from Wik
 "On this day" feed (football events). The AI only translates and shortens the supplied
 facts; code checks that it did not add a single number. The post is prepared before
 DIGEST_TIME and published right after it (Kyiv time); long posts are split in two messages.
+
+Only men's football. No forced priority for Ukrainians.
 """
 import html
 import json
@@ -36,13 +38,28 @@ WIKI_HEADERS = {
 MONTHS = ["січня", "лютого", "березня", "квітня", "травня", "червня", "липня", "серпня",
           "вересня", "жовтня", "листопада", "грудня"]
 
-FOOT_YES = re.compile(r"football\w*|soccer|FIFA|UEFA|Premier League|Champions League|"
-                      r"Europa League|Serie A|La Liga|Bundesliga|Ligue 1|FA Cup|Ballon d.Or|"
-                      r"\bclub\b|\bmatch\b|\bstadium\b|\bplayer\b|\bgoal\b|\bteam\b|"
-                      r"\bleague\b|\bcup\b|\bfinal\b|\btournament\b|\bcoach\b|\breferee\b|"
-                      r"World Cup|European Championship|Olympic", re.I)
-FOOT_NO = re.compile(r"American football|NFL|Super Bowl|Gaelic|Australian rules|rugby|cricket|"
-                     r"Canadian football|college football|gridiron|\bAFL\b", re.I)
+# Тільки чоловічий футбол
+FOOT_YES = re.compile(
+    r"football\w*|soccer|FIFA|UEFA|Premier League|Champions League|"
+    r"Europa League|Serie A|La Liga|Bundesliga|Ligue 1|FA Cup|Ballon d.Or|"
+    r"\bclub\b|\bmatch\b|\bstadium\b|\bplayer\b|\bgoal\b|\bteam\b|"
+    r"\bleague\b|\bcup\b|\bfinal\b|\btournament\b|\bcoach\b|\breferee\b|"
+    r"World Cup|European Championship|Olympic|Football Association|"
+    r"footballer|manager|coach",
+    re.I,
+)
+
+FOOT_NO = re.compile(
+    r"American football|NFL|Super Bowl|Gaelic|Australian rules|rugby|cricket|"
+    r"Canadian football|college football|gridiron|\bAFL\b|"
+    r"basketball|NBA|WNBA|baseball|hockey|tennis|golf|volleyball|"
+    r"women.?s football|women.?s soccer|female footballer|woman footballer|"
+    r"ladies.? football|girls.? football|women.?s team|women.?s national|"
+    r"women.?s world cup|women.?s champions|women.?s euro|"
+    r"\bwomen\b.*\bfootball|\bwomen\b.*\bsoccer|"
+    r"handball|water polo|futsal(?!.*men)",
+    re.I,
+)
 
 
 # ------------------------------------------------------------------ sources
@@ -50,17 +67,19 @@ FOOT_NO = re.compile(r"American football|NFL|Super Bowl|Gaelic|Australian rules|
 def run_sparql(query):
     """Выполняет SPARQL-запрос с повторными попытками при таймаутах."""
     last_error = None
-    for attempt in range(3):  # 3 попытки
+    for attempt in range(3):
         try:
-            r = requests.get("https://query.wikidata.org/sparql",
-                             params={"query": query, "format": "json"},
-                             headers={**WIKI_HEADERS, "Accept": "application/sparql-results+json"},
-                             timeout=120)  # увеличили с 70 до 120 секунд
+            r = requests.get(
+                "https://query.wikidata.org/sparql",
+                params={"query": query, "format": "json"},
+                headers={**WIKI_HEADERS, "Accept": "application/sparql-results+json"},
+                timeout=120,
+            )
             r.raise_for_status()
             return r.json()["results"]["bindings"]
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
             last_error = e
-            wait = 5 * (attempt + 1)  # 5, 10, 15 секунд
+            wait = 5 * (attempt + 1)
             print(f"  SPARQL timeout (попытка {attempt + 1}/3), ждём {wait} с...")
             time.sleep(wait)
         except requests.exceptions.HTTPError as e:
@@ -73,16 +92,21 @@ def run_sparql(query):
                 raise
     raise last_error
 
-def people_query(kind, month, day, ukrainian):
+
+def people_query(kind, month, day, ukrainian=False):
+    """Только мужчины. Украинцы — опционально, без приоритета."""
     prop = "P569" if kind == "birth" else "P570"
-    country = ("{ ?p wdt:P27 wd:Q212 } UNION { ?p wdt:P19 ?bp . ?bp wdt:P17 wd:Q212 }"
-               if ukrainian else "")
-    langs = "uk,en" if ukrainian else "en,mul"  # foreigners: international (Latin) names
-    min_links = 5 if ukrainian else 15
+    country = (
+        "{ ?p wdt:P27 wd:Q212 } UNION { ?p wdt:P19 ?bp . ?bp wdt:P17 wd:Q212 }"
+        if ukrainian else ""
+    )
+    langs = "uk,en" if ukrainian else "en,mul"
+    min_links = 5 if ukrainian else 12
     return f"""
 SELECT ?p ?pLabel ?pDescription ?date ?sl WHERE {{
   VALUES ?occ {{ wd:Q937857 wd:Q628099 }}
   ?p wdt:P106 ?occ .
+  ?p wdt:P21 wd:Q6581097 .          # только мужчины
   ?p wikibase:sitelinks ?sl .
   FILTER(?sl >= {min_links})
   {country}
@@ -92,7 +116,7 @@ SELECT ?p ?pLabel ?pDescription ?date ?sl WHERE {{
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "{langs}". }}
 }}
 ORDER BY DESC(?sl)
-LIMIT 8"""
+LIMIT 10"""
 
 
 def parse_people(bindings, kind, ukrainian):
@@ -103,13 +127,18 @@ def parse_people(bindings, kind, ukrainian):
             if not name or re.fullmatch(r"Q\d+", name):
                 continue
             desc = b.get("pDescription", {}).get("value", "")
-            if desc and not re.search(r"football|soccer|футбол", desc, re.I):
+            # дополнительная защита от женского футбола
+            if re.search(r"women|female|lady|girl", desc, re.I):
                 continue
             out.append({
-                "kind": kind, "year": int(b["date"]["value"][:4]),
-                "qid": b["p"]["value"].rsplit("/", 1)[-1], "name": name,
+                "kind": kind,
+                "year": int(b["date"]["value"][:4]),
+                "qid": b["p"]["value"].rsplit("/", 1)[-1],
+                "name": name,
                 "desc": desc,
-                "score": int(b["sl"]["value"]), "ua": ukrainian, "text": "",
+                "score": int(b["sl"]["value"]),
+                "ua": ukrainian,
+                "text": "",
             })
         except (KeyError, ValueError):
             continue
@@ -119,17 +148,20 @@ def parse_people(bindings, kind, ukrainian):
 def wikidata_people(month, day):
     items = []
     for kind in ("birth", "death"):
+        # сначала мир, потом украинцы (без приоритета в отборе)
         for ukrainian in (False, True):
             try:
-                items += parse_people(run_sparql(people_query(kind, month, day, ukrainian)),
-                                      kind, ukrainian)
+                items += parse_people(
+                    run_sparql(people_query(kind, month, day, ukrainian)),
+                    kind, ukrainian,
+                )
             except Exception as e:
                 print(f"  Wikidata ({kind}, {'UA' if ukrainian else 'world'}) failed: {e}")
     return items
 
 
 def wikipedia_feed(api_kind, month, day):
-    """api_kind: events | births | deaths. Keeps only football-related entries."""
+    """api_kind: events | births | deaths. Только мужской футбол."""
     url = f"https://en.wikipedia.org/api/rest_v1/feed/onthisday/{api_kind}/{month:02d}/{day:02d}"
     try:
         r = requests.get(url, headers=WIKI_HEADERS, timeout=30)
@@ -139,6 +171,7 @@ def wikipedia_feed(api_kind, month, day):
     except Exception as e:
         print(f"  Wikipedia feed ({api_kind}) failed: {e}")
         return []
+
     kind = {"events": "event", "births": "birth", "deaths": "death"}[api_kind]
     out = []
     for e in entries:
@@ -147,14 +180,30 @@ def wikipedia_feed(api_kind, month, day):
             continue
         if not FOOT_YES.search(text) or FOOT_NO.search(text):
             continue
-        qid = next((p.get("wikibase_item", "") for p in e.get("pages", [])
-                    if p.get("wikibase_item")), "") if kind != "event" else ""
+        # дополнительный отсев женского футбола
+        if re.search(r"\bwomen\b|\bfemale\b|\bladies\b|\bgirls\b", text, re.I):
+            continue
+
+        qid = ""
+        if kind != "event":
+            qid = next(
+                (p.get("wikibase_item", "") for p in e.get("pages", []) if p.get("wikibase_item")),
+                "",
+            )
         name, desc, ua = "", "", False
-        if kind != "event":  # entries look like "Zvonimir Boban, Croatian footballer"
+        if kind != "event":
             name, _, desc = (p.strip() for p in text.partition(","))
-            ua = bool(re.search(r"Ukrain", text))
-        out.append({"kind": kind, "year": year, "qid": qid, "name": name, "desc": desc,
-                    "score": 0, "ua": ua, "text": text if kind == "event" else ""})
+            ua = bool(re.search(r"Ukrain", text, re.I))
+        out.append({
+            "kind": kind,
+            "year": year,
+            "qid": qid,
+            "name": name,
+            "desc": desc,
+            "score": 0,
+            "ua": ua,
+            "text": text if kind == "event" else "",
+        })
     print(f"  [DEBUG] Wikipedia feed ({api_kind}): {len(out)} football entries after filter")
     return out
 
@@ -162,7 +211,8 @@ def wikipedia_feed(api_kind, month, day):
 def collect(month, day):
     people = wikidata_people(month, day)
     best = {}
-    for it in people:  # one entry per person, Ukrainian version (Ukrainian spelling) wins
+    for it in people:
+        # одна запись на человека; украинская версия имени имеет приоритет только если есть
         old = best.get(it["qid"])
         if old is None or (it["ua"] and not old["ua"]):
             best[it["qid"]] = it
@@ -171,7 +221,7 @@ def collect(month, day):
     for api_kind in ("events", "births", "deaths"):
         for it in wikipedia_feed(api_kind, month, day):
             if it["qid"] and it["qid"] in known:
-                continue  # the same person is already in the list
+                continue
             items.append(it)
     return items
 
@@ -179,7 +229,7 @@ def collect(month, day):
 # ------------------------------------------------------------------ selection
 
 def select(items, total):
-    """Mix of events, births and deaths; Ukrainians are included first; sorted by year."""
+    """Сильный приоритет событиям. Украинцы без принудительного включения."""
     items = list(items)
     chosen = []
 
@@ -192,12 +242,23 @@ def select(items, total):
                 limit -= 1
 
     by_score = lambda xs: sorted(xs, key=lambda i: -i["score"])
-    people = [i for i in items if i["kind"] in ("birth", "death")]
-    take(by_score([i for i in people if i["ua"]]), 2)
-    take([i for i in items if i["kind"] == "event"], 8)
-    take(by_score([i for i in people if i["kind"] == "birth"]), 5 - sum(c["kind"] == "birth" for c in chosen) + 0)
-    take(by_score([i for i in people if i["kind"] == "death"]), 3 - sum(c["kind"] == "death" for c in chosen))
-    take(by_score([i for i in items if i not in chosen]), total)  # fill the rest
+
+    events = [i for i in items if i["kind"] == "event"]
+    births = [i for i in items if i["kind"] == "birth"]
+    deaths = [i for i in items if i["kind"] == "death"]
+
+    # 1. Сначала берём максимум интересных событий
+    take(events, 7)
+
+    # 2. Рождения (известные игроки/тренеры)
+    take(by_score(births), 4)
+
+    # 3. Смерти
+    take(by_score(deaths), 3)
+
+    # 4. Добираем остаток чем угодно
+    take(by_score([i for i in items if i not in chosen]), total)
+
     return sorted(chosen, key=lambda i: i["year"])
 
 
@@ -209,7 +270,7 @@ def numbers(s):
 
 def line_ok(item, text):
     src = numbers(f"{item['year']} {item['text']} {item['desc']} {item['name']}")
-    if not (12 <= len(text) <= 500) or not numbers(text) <= src:
+    if not (20 <= len(text) <= 550) or not numbers(text) <= src:
         return False
     low = text.lower()
     if item["kind"] == "birth" and "народив" not in low:
@@ -229,34 +290,72 @@ def line_ok(item, text):
 
 
 def format_with_ai(items, run_start):
-    payload = [{"id": i, "type": it["kind"], "year": it["year"], "name": it["name"],
-                "description": it["desc"], "text": it["text"], "ukrainian": it["ua"]}
-               for i, it in enumerate(items)]
+    payload = [
+        {
+            "id": i,
+            "type": it["kind"],
+            "year": it["year"],
+            "name": it["name"],
+            "description": it["desc"],
+            "text": it["text"],
+            "ukrainian": it["ua"],
+        }
+        for i, it in enumerate(items)
+    ]
+
     prompt = (
-        "Ти редактор українського футбольного Telegram-каналу. Нижче перевірені факти з "
-        "Вікіпедії та Вікіданих. Для кожного напиши ОДИН змістовний рядок українською, БЕЗ року на початку.\n"
-        "Правила:\n"
-        "- використовуй ТІЛЬКИ дані з наведеного запису; нічого не додавай і не вигадуй; "
-        "не змінюй і не додавай жодних чисел, рахунків, назв, дат;\n"
-        "- **для type=event**: розкажи подію ДЕТАЛЬНО — 2-3 речення: що сталося, де, чому важливо. "
-        "Приклад: «10 жовтня 1896 року відбувся перший футбольний матч на стадіоні Craven Cottage у Лондоні. "
-        "Згодом він став домашньою ареною «Фулгема» та однією з історичних футбольних локацій Англії.»\n"
-        "- **для type=birth**: почни з «народився» («народилася»), далі ім'я, хто це за описом "
-        "(національність, футболіст/тренер), і додай 1 речення контексту — чим відомий, "
-        "за який клуб грав, які досягнення (ТІЛЬКИ якщо це є в даних). "
-        "Приклад: «Петр Жеков (Болгарія) — один із найвидатніших бомбардирів болгарського футболу. "
-        "Він забив 253 голи в чемпіонаті Болгарії та здобув європейську «Золоту бутсу» 1969 року.»\n"
-        "- **для type=death**: почни з «помер» («померла»), далі ім'я, хто це, і коротко — "
-        "чим відомий (ТІЛЬКИ з даних);\n"
-        "- **КРИТИЧНО ВАЖЛИВО ПРО ІМЕНА ТА НАЗВИ:**\n"
-        "  * Іноземні імена, прізвища, назви клубів, стадіонів залишай **ЛАТИНКОЮ** "
-        "(Real Madrid, Zvonimir Boban, Wembley, Craven Cottage). НЕ перекладай і НЕ транслітеруй кирилицею.\n"
-        "  * Українські назви пиши **УКРАЇНСЬКОЮ** (Динамо Київ, Андрій Шевченко, Олімпійський).\n"
-        "  * Заборонено використовувати російські літери (ы, э, ё, ъ).\n"
-        "- без оцінок, епітетів, емодзі, Markdown і посилань.\n"
-        'Відповідай ЛИШЕ JSON: {"lines": [{"id": 0, "text": "..."}, ...]} (id з вхідних даних).\n\n'
+        "Ти редактор українського футбольного Telegram-каналу «football 90+». "
+        "Нижче — перевірені факти з Вікіпедії та Вікіданих про чоловічий футбол. "
+        "Для кожного напиши ОДИН змістовний абзац українською (1–3 речення), БЕЗ року на початку.\n\n"
+        "=== СТИЛЬ (обов’язково дотримуйся) ===\n"
+        "Пиши живо і цікаво, як у хороших історичних постах. Не сухі довідки.\n\n"
+        "• type=event — розкажи подію детально: що сталося, де, чому це важливо або цікаво. "
+        "Можна 2–3 речення.\n"
+        "  Приклади хорошого стилю:\n"
+        "  «У Глазго відбулася гра між Queen’s Park і лондонським Wanderers. "
+        "Програма цього матчу вважається першою відомою друкованою програмою матчу, "
+        "де були зазначені команди та склади.»\n"
+        "  «На засіданні Brentford Rowing Club було ухвалено рішення провести зустріч "
+        "щодо створення футбольного клубу. Це стало безпосереднім початком процесу, "
+        "який привів до заснування Brentford Football Club.»\n"
+        "  «У Белграді відбулася перша футбольна гра на ще не завершеній арені, "
+        "яка згодом стала відомою як стадіон Югославської народної армії, "
+        "а нині має назву Partizan Stadium.»\n"
+        "  «Відбірковий матч між Естонією та Шотландією фактично завершився через "
+        "кілька секунд після стартового свистка. Естонська команда не вийшла на поле "
+        "через суперечку щодо часу початку матчу та освітлення стадіону. "
+        "Пізніше FIFA ухвалила рішення про проведення гри повторно.»\n\n"
+        "• type=birth — починай з «Народився», далі ім’я + хто це + 1–2 речення "
+        "про досягнення / клуби / значення (ТІЛЬКИ з даних).\n"
+        "  Приклади:\n"
+        "  «Народився Вільям «Джек» Крейстон — майбутній футболіст і тренер Arsenal. "
+        "Він виступав за збірну Англії, а після завершення ігрової кар’єри став "
+        "менеджером Arsenal.»\n"
+        "  «Народився Петр Жеков (Болгарія) — один із найвидатніших бомбардирів "
+        "болгарського футболу. Він забив 253 голи в чемпіонаті Болгарії та здобув "
+        "європейську «Золоту бутсу» 1969 року.»\n"
+        "  «Народився Тоні Адамс (Англія) — легендарний капітан Arsenal, який провів "
+        "за клуб усю свою професійну ігрову кар’єру. Він виграв чотири чемпіонські "
+        "титули Англії та три Кубки Англії.»\n\n"
+        "• type=death — починай з «Помер», далі ім’я + хто це + коротко чим відомий "
+        "(ТІЛЬКИ з даних).\n\n"
+        "=== ЖОРСТКІ ПРАВИЛА ===\n"
+        "1. Використовуй ТІЛЬКИ дані з наведеного запису. Нічого не додавай і не вигадуй. "
+        "Не змінюй і не додавай жодних чисел, рахунків, дат, назв клубів чи титулів.\n"
+        "2. Іноземні імена, прізвища, назви клубів і стадіонів залишай ЛАТИНКОЮ "
+        "(Real Madrid, Zvonimir Boban, Craven Cottage, Wembley, Arsenal, Partizan Stadium). "
+        "НЕ перекладай і НЕ транслітеруй.\n"
+        "3. Українські імена та назви пиши українською (Динамо Київ, Андрій Шевченко, "
+        "НСК «Олімпійський»).\n"
+        "4. Тільки чоловічий рід: «народився», «помер» (ніколи «народилася» / «померла»).\n"
+        "5. Заборонено російські літери (ы, э, ё, ъ).\n"
+        "6. Без емодзі, Markdown, посилань, оціночних епітетів типу «великий», «легендарний» "
+        "— якщо цього немає в даних.\n"
+        "7. Відповідай ЛИШЕ валідним JSON:\n"
+        '{"lines": [{"id": 0, "text": "..."}, ...]}\n\n'
         + json.dumps(payload, ensure_ascii=False)
     )
+
     res = quiz.ai_call(prompt, run_start)
     if res is None:
         return None
@@ -267,6 +366,7 @@ def format_with_ai(items, run_start):
     except Exception as e:
         print("  AI answer is not usable:", e)
         return []
+
     lines = []
     for i, it in enumerate(items):
         if i in texts and line_ok(it, texts[i]):
@@ -300,6 +400,10 @@ def prepare(now, run_start):
     if len(items) < DIGEST_MIN_ITEMS:
         return []
     chosen = select(items, DIGEST_ITEMS)
+    print(f"Digest: selected {len(chosen)} facts "
+          f"(events={sum(1 for i in chosen if i['kind']=='event')}, "
+          f"births={sum(1 for i in chosen if i['kind']=='birth')}, "
+          f"deaths={sum(1 for i in chosen if i['kind']=='death')})")
     lines = format_with_ai(chosen, run_start)
     if not lines or len(lines) < DIGEST_MIN_ITEMS:
         print(f"Digest: only {len(lines or [])} verified line(s), minimum is {DIGEST_MIN_ITEMS}.")
@@ -309,7 +413,7 @@ def prepare(now, run_start):
 
 # ------------------------------------------------------------------ publishing & state
 
-DIGEST_IMAGE = os.environ.get("DIGEST_IMAGE", "Цього дня в історії футбола.jpg")  # имя файла в репозитории
+DIGEST_IMAGE = os.environ.get("DIGEST_IMAGE", "Цього дня в історії футбола.jpg")
 
 def send_message(text, image=None):
     api = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}"
@@ -326,8 +430,12 @@ def send_message(text, image=None):
         print("  sendPhoto failed, sending text only:", r.text[:200])
     r = requests.post(
         f"{api}/sendMessage",
-        data={"chat_id": CHANNEL, "text": text, "parse_mode": "HTML",
-              "disable_web_page_preview": True},
+        data={
+            "chat_id": CHANNEL,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        },
         timeout=60,
     )
     if not r.ok:
@@ -360,7 +468,7 @@ def main():
     now = datetime.now(ZoneInfo("Europe/Kyiv"))
     today = now.date().isoformat()
 
-    if os.environ.get("DIGEST_FORCE", "").lower() == "true":  # manual test: publish now
+    if os.environ.get("DIGEST_FORCE", "").lower() == "true":
         messages = prepare(now, run_start)
         if messages:
             publish(messages)
@@ -379,7 +487,7 @@ def main():
     before_time = now.hour * 60 + now.minute < pn.to_minutes(DIGEST_TIME)
     if not state["messages"]:
         if before_time and time.time() - state["last_try"] < 600:
-            save_state(state)  # prepare calmly: one try per 10 minutes
+            save_state(state)
             return
         state["last_try"] = time.time()
         if not before_time:
