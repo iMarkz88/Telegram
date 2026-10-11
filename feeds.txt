@@ -2,3 +2,4 @@
 # Чтобы проверить, какие пускают GitHub: Actions -> "Check feeds" -> Run workflow.
 # Ниже адреса-догадки, они могут не существовать. Проверьте и оставьте рабочие.
 https://isport.ua/rss
+https://ukrfootball.ua/rss.xml
