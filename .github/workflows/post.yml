@@ -53,7 +53,7 @@ jobs:
           LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
           LLM2_MODEL: "openai/gpt-4o-mini"
           LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
-          LLM3_MODEL: "llama-3.3-70b-versatile"
+          LLM3_MODEL: "llama-3.1-70b-versatile"
           LLM3_BASE_URL: "https://api.groq.com/openai/v1"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           DIGEST_TIME: "09:00"
@@ -75,7 +75,7 @@ jobs:
           LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
           LLM2_MODEL: "openai/gpt-4o-mini"
           LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
-          LLM3_MODEL: "llama-3.3-70b-versatile"
+          LLM3_MODEL: "llama-3.1-70b-versatile"
           LLM3_BASE_URL: "https://api.groq.com/openai/v1"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           PLAYERS_FORCE: ${{ inputs.players_now }}
@@ -95,7 +95,7 @@ jobs:
           LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
           LLM2_MODEL: "openai/gpt-4o-mini"
           LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
-          LLM3_MODEL: "llama-3.3-70b-versatile"
+          LLM3_MODEL: "llama-3.1-70b-versatile"
           LLM3_BASE_URL: "https://api.groq.com/openai/v1"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           CLUBS_FORCE: ${{ inputs.clubs_now }}
@@ -115,7 +115,7 @@ jobs:
           LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
           LLM2_MODEL: "openai/gpt-4o-mini"
           LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
-          LLM3_MODEL: "llama-3.3-70b-versatile"
+          LLM3_MODEL: "llama-3.1-70b-versatile"
           LLM3_BASE_URL: "https://api.groq.com/openai/v1"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           QUIZ_TIME: "19:30"
@@ -138,7 +138,7 @@ jobs:
           LLM2_API_KEY: ${{ secrets.LLM2_API_KEY }}
           LLM2_MODEL: "openai/gpt-4o-mini"
           LLM3_API_KEY: ${{ secrets.LLM3_API_KEY }}
-          LLM3_MODEL: "llama-3.3-70b-versatile"
+          LLM3_MODEL: "llama-3.1-70b-versatile"
           LLM3_BASE_URL: "https://api.groq.com/openai/v1"
           TELEGRAM_CHANNEL: "@football_90_pluss"
           USE_SOURCE_IMAGE: "true"
