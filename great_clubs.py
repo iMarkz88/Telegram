@@ -446,17 +446,63 @@ def format_with_ai(source_text: str, ua_title: str, run_start: float) -> str | N
 
 
 def build_messages(text: str, ua_title: str) -> list[str]:
+    """Розбиває довгий текст на повідомлення ≤ TG_LIMIT символів.
+    Якщо один абзац довший за ліміт — ріже по реченнях / жорстко по символах.
+    """
     head = f"🏟️ <b>Великі клуби</b>\n📅 {ua_title}\n\n"
     cont = f"🏟️ <b>Великі клуби (продовження)</b>\n📅 {ua_title}\n\n"
-    messages, current = [], head
-    paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
-    for p in paragraphs:
-        p = html.escape(p)
-        if len(current) + len(p) + 2 > TG_LIMIT and current not in (head, cont):
+    max_body = TG_LIMIT - max(len(head), len(cont)) - 20
+
+    def split_long(chunk: str) -> list[str]:
+        """Ріже надто довгий фрагмент по реченнях, потім по символах."""
+        if len(chunk) <= max_body:
+            return [chunk]
+        parts = []
+        # спочатку по реченнях
+        sentences = re.split(r"(?<=[.!?…])\s+", chunk)
+        buf = ""
+        for s in sentences:
+            if len(s) > max_body:
+                if buf:
+                    parts.append(buf.strip())
+                    buf = ""
+                # жорстко по символах
+                for i in range(0, len(s), max_body):
+                    parts.append(s[i:i + max_body])
+            elif len(buf) + len(s) + 1 <= max_body:
+                buf = (buf + " " + s).strip()
+            else:
+                if buf:
+                    parts.append(buf.strip())
+                buf = s
+        if buf:
+            parts.append(buf.strip())
+        return parts
+
+    raw_paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
+    pieces = []
+    for para in raw_paragraphs:
+        pieces.extend(split_long(html.escape(para)))
+
+    messages = []
+    current = head
+    for piece in pieces:
+        add = piece + "\n\n"
+        if len(current) + len(add) > TG_LIMIT and current not in (head, cont):
             messages.append(current.rstrip())
             current = cont
-        current += p + "\n\n"
-    messages.append(current.rstrip())
+        # якщо навіть з cont не влазить (дуже довгий piece) — окреме повідомлення
+        if len(current) + len(add) > TG_LIMIT:
+            if current not in (head, cont):
+                messages.append(current.rstrip())
+            messages.append((cont + piece).rstrip())
+            current = cont
+        else:
+            current += add
+    if current not in (head, cont) and current.strip():
+        messages.append(current.rstrip())
+    elif not messages and current.strip():
+        messages.append(current.rstrip())
     return messages
 
 
