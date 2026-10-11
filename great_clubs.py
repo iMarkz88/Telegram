@@ -438,7 +438,7 @@ def format_with_ai(source_text: str, ua_title: str, run_start: float) -> str | N
     raw, _ = res
     text_out = quiz.clean(raw)
     word_count = len(text_out.split())
-    if word_count < 900:
+    if word_count < 700:
         print(f"  AI text too short: {word_count} words")
         return None
     print(f"  AI text ready: {word_count} words")
