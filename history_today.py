@@ -152,7 +152,7 @@ def wikipedia_feed(api_kind, month, day):
             ua = bool(re.search(r"Ukrain", text))
         out.append({"kind": kind, "year": year, "qid": qid, "name": name, "desc": desc,
                     "score": 0, "ua": ua, "text": text if kind == "event" else ""})
-        print(f"  [DEBUG] Wikipedia feed ({api_kind}): {len(out)} football entries after filter")
+    print(f"  [DEBUG] Wikipedia feed ({api_kind}): {len(out)} football entries after filter")
     return out
 
 
