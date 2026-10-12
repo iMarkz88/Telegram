@@ -1,8 +1,14 @@
 """
 Рубрика «Великі футболісти»
 Публікація: щопонеділка о 13:00 за Києвом.
-Джерело: Wikipedia → переказ українською (1500+ слів).
-Картинка додається окремо.
+
+Джерела пулу (автоматично):
+  1. Переможці Ballon d\'Or (Wikidata Q166177) з 1956
+  2. Номінанти (P1411) з Wikidata
+  3. Топ-5 за роками з RSSSF europa-poy.html
+
+Бот не повторює published; тест PLAYERS_FORCE не пише в лог.
+Переказ ~95% фактів, 2000–3000 слів, жорстке розбиття Telegram.
 """
 import html
 import json
@@ -20,158 +26,415 @@ import post_news as pn
 import quiz
 
 CHANNEL = os.environ.get("TELEGRAM_CHANNEL", "@football_90_pluss")
-PUBLISH_TIME = "13:00"          # Київ
+PUBLISH_TIME = "13:00"
 STATE_FILE = Path("great_players_state.json")
 TG_LIMIT = 3900
-
-# Список легенд (можна розширювати). Скрипт бере наступного по черзі.
-PLAYERS = [
-    {"name": "Rui Costa", "wiki": "Rui_Costa", "ua_title": "Руй Кошта"},
-    {"name": "Zinedine Zidane", "wiki": "Zinedine_Zidane", "ua_title": "Зінедін Зідан"},
-    {"name": "Andrea Pirlo", "wiki": "Andrea_Pirlo", "ua_title": "Андреа Пірло"},
-    {"name": "Xavi", "wiki": "Xavi", "ua_title": "Хаві"},
-    {"name": "Andrés Iniesta", "wiki": "Andrés_Iniesta", "ua_title": "Андрес Іньєста"},
-    {"name": "Francesco Totti", "wiki": "Francesco_Totti", "ua_title": "Франческо Тотті"},
-    {"name": "Paolo Maldini", "wiki": "Paolo_Maldini", "ua_title": "Паоло Мальдіні"},
-    {"name": "Franco Baresi", "wiki": "Franco_Baresi", "ua_title": "Франко Барезі"},
-    {"name": "Michel Platini", "wiki": "Michel_Platini", "ua_title": "Мішель Платіні"},
-    {"name": "Johan Cruyff", "wiki": "Johan_Cruyff", "ua_title": "Йоган Кройф"},
-    {"name": "Marco van Basten", "wiki": "Marco_van_Basten", "ua_title": "Марко ван Бастен"},
-    {"name": "Ruud Gullit", "wiki": "Ruud_Gullit", "ua_title": "Рууд Гулліт"},
-    {"name": "George Best", "wiki": "George_Best", "ua_title": "Джордж Бест"},
-    {"name": "Bobby Charlton", "wiki": "Bobby_Charlton", "ua_title": "Боббі Чарлтон"},
-    {"name": "Eusébio", "wiki": "Eusébio", "ua_title": "Ейсебіо"},
-    {"name": "Ferenc Puskás", "wiki": "Ferenc_Puskás", "ua_title": "Ференц Пушкаш"},
-    {"name": "Diego Maradona", "wiki": "Diego_Maradona", "ua_title": "Дієго Марадона"},
-    {"name": "Pelé", "wiki": "Pelé", "ua_title": "Пеле"},
-    {"name": "Garrincha", "wiki": "Garrincha", "ua_title": "Гаррінча"},
-    {"name": "Ronaldo", "wiki": "Ronaldo_(Brazilian_footballer)", "ua_title": "Роналдо"},
-    {"name": "Ronaldinho", "wiki": "Ronaldinho", "ua_title": "Роналдіньйо"},
-    {"name": "Kaká", "wiki": "Kaká", "ua_title": "Кака"},
-    {"name": "Rivaldo", "wiki": "Rivaldo", "ua_title": "Рівалдо"},
-    {"name": "Thierry Henry", "wiki": "Thierry_Henry", "ua_title": "Тьєррі Анрі"},
-    {"name": "Zlatan Ibrahimović", "wiki": "Zlatan_Ibrahimović", "ua_title": "Златан Ібрагімович"},
-    {"name": "Andriy Shevchenko", "wiki": "Andriy_Shevchenko", "ua_title": "Андрій Шевченко"},
-    {"name": "Oleh Blokhin", "wiki": "Oleh_Blokhin", "ua_title": "Олег Блохін"},
-]
+BALLON_DOR = "Q166177"
+RSSSF_URL = "https://www.rsssf.org/miscellaneous/europa-poy.html"
 
 WIKI_HEADERS = {
     "User-Agent": "football90-great-players/1.0 (Telegram @football_90_pluss)",
     "Accept": "application/json",
 }
+HTTP_HEADERS = {
+    "User-Agent": "football90-great-players/1.0 (Telegram @football_90_pluss)",
+}
+
+
+def run_sparql(query: str, timeout: int = 90):
+    last_error = None
+    for attempt in range(3):
+        try:
+            r = requests.get(
+                "https://query.wikidata.org/sparql",
+                params={"query": query, "format": "json"},
+                headers={**WIKI_HEADERS, "Accept": "application/sparql-results+json"},
+                timeout=timeout,
+            )
+            r.raise_for_status()
+            return r.json()["results"]["bindings"]
+        except Exception as e:
+            last_error = e
+            time.sleep(5 * (attempt + 1))
+    raise last_error
+
+
+def fetch_ballon_dor_winners() -> list:
+    query = """
+    SELECT DISTINCT ?person ?personLabel ?year ?sl WHERE {
+      ?person wdt:P166 wd:Q166177 .
+      OPTIONAL {
+        ?person p:P166 ?st .
+        ?st ps:P166 wd:Q166177 .
+        OPTIONAL { ?st pq:P585 ?date . BIND(YEAR(?date) AS ?year) }
+      }
+      ?person wikibase:sitelinks ?sl .
+      FILTER(?sl >= 20)
+      ?person wdt:P21 wd:Q6581097 .
+      SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+    }
+    ORDER BY DESC(?sl)
+    """
+    try:
+        rows = run_sparql(query, timeout=120)
+    except Exception as e:
+        print(f"  Ballon d'Or winners query failed: {e}")
+        return []
+    out, seen = [], set()
+    for b in rows:
+        qid = b["person"]["value"].rsplit("/", 1)[-1]
+        if qid in seen:
+            continue
+        seen.add(qid)
+        name = b.get("personLabel", {}).get("value", "")
+        if not name or name.startswith("Q"):
+            continue
+        year = int(b["year"]["value"]) if "year" in b else None
+        out.append({
+            "qid": qid, "name": name, "source": "ballon_winner",
+            "years": [year] if year else [], "score": int(b.get("sl", {}).get("value", 0)),
+        })
+    print(f"  Ballon d'Or winners: {len(out)}")
+    return out
+
+
+def fetch_ballon_dor_nominees_wikidata() -> list:
+    query = """
+    SELECT DISTINCT ?person ?personLabel ?sl WHERE {
+      ?person wdt:P1411 wd:Q166177 .
+      ?person wikibase:sitelinks ?sl .
+      FILTER(?sl >= 15)
+      ?person wdt:P21 wd:Q6581097 .
+      SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+    }
+    ORDER BY DESC(?sl)
+    LIMIT 400
+    """
+    try:
+        rows = run_sparql(query, timeout=90)
+    except Exception as e:
+        print(f"  Ballon nominees (WD) failed: {e}")
+        return []
+    out, seen = [], set()
+    for b in rows:
+        qid = b["person"]["value"].rsplit("/", 1)[-1]
+        if qid in seen:
+            continue
+        seen.add(qid)
+        name = b.get("personLabel", {}).get("value", "")
+        if not name or name.startswith("Q"):
+            continue
+        out.append({
+            "qid": qid, "name": name, "source": "ballon_nominee",
+            "years": [], "score": int(b.get("sl", {}).get("value", 0)),
+        })
+    print(f"  Ballon d'Or nominees (WD): {len(out)}")
+    return out
+
+
+def fetch_rsssf_top5_names() -> list:
+    try:
+        r = requests.get(RSSSF_URL, headers=HTTP_HEADERS, timeout=45)
+        r.raise_for_status()
+        text = r.text
+    except Exception as e:
+        print(f"  RSSSF fetch failed: {e}")
+        return []
+    names = []
+    for m in re.finditer(r"^\s*\d+\.\s+([A-Za-zÀ-ÿ\.\-\'\s]+?)\s{2,}\(", text, re.M):
+        raw = m.group(1).strip()
+        parts = raw.split()
+        fixed = [p.title() if p.isupper() and len(p) > 1 else p for p in parts]
+        name = " ".join(fixed)
+        if len(name) > 3:
+            names.append(name)
+    seen, uniq = set(), []
+    for n in names:
+        k = n.lower()
+        if k not in seen:
+            seen.add(k)
+            uniq.append(n)
+    print(f"  RSSSF top-5 names parsed: {len(uniq)}")
+    return uniq
+
+
+def resolve_via_wbsearch(name: str):
+    try:
+        r = requests.get(
+            "https://www.wikidata.org/w/api.php",
+            params={
+                "action": "wbsearchentities", "search": name, "language": "en",
+                "type": "item", "limit": 5, "format": "json",
+            },
+            headers=WIKI_HEADERS, timeout=20,
+        )
+        r.raise_for_status()
+        for hit in r.json().get("search", []):
+            desc = (hit.get("description") or "").lower()
+            if "footballer" in desc or "football player" in desc or "soccer" in desc:
+                return {
+                    "qid": hit["id"], "name": hit.get("label", name),
+                    "source": "rsssf_search", "years": [], "score": 0,
+                }
+    except Exception:
+        pass
+    return None
+
+
+def resolve_name_to_wikidata(name: str):
+    safe = name.replace('"', "")
+    query = f"""
+    SELECT ?person ?personLabel ?sl WHERE {{
+      ?person wdt:P106 wd:Q937857 .
+      ?person wdt:P21 wd:Q6581097 .
+      ?person rdfs:label "{safe}"@en .
+      ?person wikibase:sitelinks ?sl .
+      FILTER(?sl >= 10)
+      SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+    }}
+    ORDER BY DESC(?sl) LIMIT 1
+    """
+    try:
+        rows = run_sparql(query, timeout=30)
+        if not rows:
+            return resolve_via_wbsearch(name)
+        b = rows[0]
+        return {
+            "qid": b["person"]["value"].rsplit("/", 1)[-1],
+            "name": b.get("personLabel", {}).get("value", name),
+            "source": "rsssf", "years": [],
+            "score": int(b.get("sl", {}).get("value", 0)),
+        }
+    except Exception:
+        return resolve_via_wbsearch(name)
+
+
+def get_en_wiki_title(qid: str):
+    query = f"""
+    SELECT ?title WHERE {{
+      ?sitelink schema:about wd:{qid} ;
+                schema:isPartOf <https://en.wikipedia.org/> ;
+                schema:name ?title .
+    }} LIMIT 1
+    """
+    try:
+        rows = run_sparql(query, timeout=25)
+        if rows:
+            return rows[0]["title"]["value"].replace(" ", "_")
+    except Exception:
+        pass
+    return None
+
+
+def build_player_pool() -> list:
+    winners = fetch_ballon_dor_winners()
+    nominees_wd = fetch_ballon_dor_nominees_wikidata()
+    by_qid = {}
+    for p in winners + nominees_wd:
+        qid = p["qid"]
+        if qid not in by_qid:
+            by_qid[qid] = p
+        else:
+            old = by_qid[qid]
+            old["years"] = list(set(old.get("years", []) + p.get("years", [])))
+            old["score"] = max(old.get("score", 0), p.get("score", 0))
+            if p["source"] == "ballon_winner":
+                old["source"] = "ballon_winner"
+
+    rsssf_names = fetch_rsssf_top5_names()
+    resolved = 0
+    for name in rsssf_names[:120]:
+        if resolved >= 80:
+            break
+        hit = resolve_name_to_wikidata(name)
+        if not hit:
+            continue
+        if hit["qid"] not in by_qid:
+            by_qid[hit["qid"]] = hit
+            resolved += 1
+        time.sleep(0.15)
+    print(f"  RSSSF resolved new: {resolved}")
+
+    pool = list(by_qid.values())
+    pool.sort(key=lambda p: (0 if p.get("source") == "ballon_winner" else 1, -p.get("score", 0), p.get("name", "")))
+    print(f"  Total unique players in pool: {len(pool)}")
+    for i, p in enumerate(pool[:15]):
+        print(f"    {i+1}. {p['name']} [{p.get('source')}] sl={p.get('score')}")
+    return pool
+
+
+def load_state():
+    state = {
+        "published": [], "last_date": "", "done": False, "messages": [],
+        "current_qid": "", "current_title": "", "pool_cache": [], "pool_updated": "",
+    }
+    if STATE_FILE.exists():
+        state.update(json.loads(STATE_FILE.read_text(encoding="utf-8")))
+    state["published"] = list(dict.fromkeys(state.get("published", [])))
+    return state
+
+
+def save_state(state):
+    STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def choose_next_player(state):
+    published = set(state.get("published", []))
+    today = datetime.now(ZoneInfo("Europe/Kyiv")).date().isoformat()
+    need_refresh = not state.get("pool_cache") or state.get("pool_updated", "") < today[:8]
+    if need_refresh:
+        try:
+            pool = build_player_pool()
+            state["pool_cache"] = pool
+            state["pool_updated"] = today
+            save_state(state)
+        except Exception as e:
+            print(f"  Failed to build player pool: {e}")
+            pool = state.get("pool_cache", [])
+    else:
+        pool = state.get("pool_cache", [])
+    for p in pool:
+        if p["qid"] not in published:
+            title = get_en_wiki_title(p["qid"]) or p["name"].replace(" ", "_")
+            p = dict(p)
+            p["wiki"] = title
+            p["ua_title"] = p["name"]
+            return p
+    print("Great Players: усі з пулу вже опубліковані.")
+    return None
 
 
 def fetch_wikipedia(title: str) -> str:
-    """Отримує повний текст статті англійською."""
-    url = f"https://en.wikipedia.org/w/api.php"
-    params = {
-        "action": "query",
-        "format": "json",
-        "titles": title,
-        "prop": "extracts",
-        "explaintext": True,
-        "exsectionformat": "plain",
-    }
-    r = requests.get(url, params=params, headers=WIKI_HEADERS, timeout=60)
+    r = requests.get(
+        "https://en.wikipedia.org/w/api.php",
+        params={
+            "action": "query", "format": "json", "titles": title,
+            "prop": "extracts", "explaintext": True, "exsectionformat": "plain",
+        },
+        headers=WIKI_HEADERS, timeout=60,
+    )
     r.raise_for_status()
-    pages = r.json()["query"]["pages"]
-    page = next(iter(pages.values()))
-    return page.get("extract", "")
+    page = next(iter(r.json()["query"]["pages"].values()))
+    extract = page.get("extract", "")
+    if not extract or "missing" in page:
+        raise ValueError(f"Wikipedia page not found: {title}")
+    return extract
 
 
-def format_with_ai(source_text: str, ua_title: str, run_start: float) -> str | None:
+def format_with_ai(source_text: str, ua_title: str, run_start: float):
     prompt = f"""
 Ти — головний редактор українського футбольного Telegram-каналу «football 90+».
 Напиши ДОВГИЙ розгорнутий матеріал українською мовою про футболіста {ua_title}.
 
-ОБОВ’ЯЗКОВІ ВИМОГИ:
-1. Об’єм — НЕ МЕНШЕ 1500 слів (краще 1600–1800).
-2. Перекажи зміст статті своїми словами. Нічого не вигадуй. Не додавай фактів, яких немає в джерелі.
-3. Структура:
-   - Вступ (хто це, чому легенда)
-   - Дитинство і початок кар’єри
-   - Клубна кар’єра (по клубах, з деталями)
-   - Збірна
-   - Стиль гри
-   - Досягнення і трофеї
-   - Після кар’єри (якщо є)
-   - Висновок / значення для футболу
-4. Іноземні імена, назви клубів, стадіонів залишай ЛАТИНКОЮ (Rui Costa, Benfica, Fiorentina, AC Milan, San Siro тощо).
-5. Українські імена та назви — українською.
-6. Без емодзі, Markdown, посилань, оціночних епітетів, яких немає в джерелі.
-7. Пиши живо, цікаво, але строго по фактах.
-8. Відповідай ЛИШЕ текстом статті. Без вступу типу «Ось текст» і без JSON.
+=== ТОЧНІСТЬ ПЕРЕКАЗУ (критично) ===
+1. Переказ має покривати ПРИБЛИЗНО 95% фактів з джерела. Не скорочуй до вижимки.
+2. Йди по статті послідовно: майже кожне змістовне речення відображай своїми словами.
+3. Усі згадані клуби, тренери, партнери — з роками і досягненнями, ЯКЩО вони є в тексті. Не вигадуй.
+
+=== ДАТИ І ТРОФЕЇ ===
+4. Усі важливі дати: народження, дебют, трансфери, титули, Ballon d\'Or, збірна.
+5. На ключові дати — 2–3 речення (лише з даних).
+
+=== ОБСЯГ ===
+6. Орієнтир 2000–3000 слів. Бот розіб\'є на кілька повідомлень.
+7. Іноземні імена і клуби — ЛАТИНКОЮ.
+8. Без емодзі, Markdown, посилань.
+9. Відповідай ЛИШЕ текстом статті.
 
 Джерело (англійська Вікіпедія):
-{source_text[:12000]}
+{source_text[:18000]}
 """
     res = quiz.ai_call(prompt, run_start)
     if res is None:
         return None
     raw, _ = res
-    text = quiz.clean(raw)
-    # проста перевірка довжини
-    if len(text.split()) < 1400:
-        print(f"  AI text too short: {len(text.split())} words")
+    text_out = quiz.clean(raw)
+    wc = len(text_out.split())
+    if wc < 1400:
+        print(f"  AI text too short: {wc} words")
         return None
-    return text
+    print(f"  AI text ready: {wc} words")
+    return text_out
 
 
-def build_messages(text: str, ua_title: str) -> list[str]:
+def build_messages(text: str, ua_title: str) -> list:
     head = f"⚽ <b>Великі футболісти</b>\n📅 {ua_title}\n\n"
     cont = f"⚽ <b>Великі футболісти (продовження)</b>\n📅 {ua_title}\n\n"
+    max_body = TG_LIMIT - max(len(head), len(cont)) - 20
+
+    def split_long(chunk: str) -> list:
+        if len(chunk) <= max_body:
+            return [chunk]
+        parts, buf = [], ""
+        for s in re.split(r"(?<=[.!?…])\s+", chunk):
+            if len(s) > max_body:
+                if buf:
+                    parts.append(buf.strip())
+                    buf = ""
+                for i in range(0, len(s), max_body):
+                    parts.append(s[i:i + max_body])
+            elif len(buf) + len(s) + 1 <= max_body:
+                buf = (buf + " " + s).strip()
+            else:
+                if buf:
+                    parts.append(buf.strip())
+                buf = s
+        if buf:
+            parts.append(buf.strip())
+        return parts
+
+    pieces = []
+    for para in [p.strip() for p in text.split("\n") if p.strip()]:
+        pieces.extend(split_long(html.escape(para)))
+
     messages, current = [], head
-    paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
-    for p in paragraphs:
-        p = html.escape(p)
-        if len(current) + len(p) + 2 > TG_LIMIT and current not in (head, cont):
+    for piece in pieces:
+        add = piece + "\n\n"
+        if len(current) + len(add) > TG_LIMIT and current not in (head, cont):
             messages.append(current.rstrip())
             current = cont
-        current += p + "\n\n"
-    messages.append(current.rstrip())
+        if len(current) + len(add) > TG_LIMIT:
+            if current not in (head, cont):
+                messages.append(current.rstrip())
+            messages.append((cont + piece).rstrip())
+            current = cont
+        else:
+            current += add
+    if current not in (head, cont) and current.strip():
+        messages.append(current.rstrip())
+    elif not messages and current.strip():
+        messages.append(current.rstrip())
     return messages
 
 
-def load_state():
-    state = {"index": 0, "last_date": "", "done": False}
-    if STATE_FILE.exists():
-        state.update(json.loads(STATE_FILE.read_text(encoding="utf-8")))
-    return state
-
-
-def save_state(state):
-    STATE_FILE.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-
-
-def prepare(run_start: float) -> list[str] | None:
+def prepare(run_start: float):
     state = load_state()
-    idx = state["index"] % len(PLAYERS)
-    player = PLAYERS[idx]
-    print(f"Great Players: preparing {player['ua_title']} ({player['wiki']})")
+    player = choose_next_player(state)
+    if not player:
+        return None, "", ""
+    print(f"Great Players: preparing {player['name']} ({player.get('wiki')})")
     try:
         source = fetch_wikipedia(player["wiki"])
         if len(source) < 500:
-            print("  Wikipedia text too short")
-            return None
+            print("  Wikipedia too short, skip & mark published")
+            state["published"].append(player["qid"])
+            save_state(state)
+            return None, "", ""
     except Exception as e:
         print(f"  Wikipedia fetch failed: {e}")
-        return None
-    text = format_with_ai(source, player["ua_title"], run_start)
+        return None, "", ""
+    text = format_with_ai(source, player["name"], run_start)
     if not text:
-        return None
-    return build_messages(text, player["ua_title"])
+        return None, "", ""
+    return build_messages(text, player["name"]), player["qid"], player["name"]
 
 
 def send_message(text: str):
     api = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}"
     r = requests.post(
         f"{api}/sendMessage",
-        data={
-            "chat_id": CHANNEL,
-            "text": text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        },
+        data={"chat_id": CHANNEL, "text": text, "parse_mode": "HTML",
+              "disable_web_page_preview": True},
         timeout=60,
     )
     if not r.ok:
@@ -179,7 +442,7 @@ def send_message(text: str):
         r.raise_for_status()
 
 
-def publish(messages: list[str]):
+def publish(messages: list):
     for i, m in enumerate(messages):
         send_message(m)
         if i < len(messages) - 1:
@@ -194,15 +457,14 @@ def main():
     today = now.date().isoformat()
 
     if os.environ.get("PLAYERS_FORCE", "").lower() == "true":
-        messages = prepare(run_start)
+        messages, qid, title = prepare(run_start)
         if messages:
             publish(messages)
-            print(f"Great Players test published ({len(messages)} msgs).")
+            print(f"Great Players TEST published ({len(messages)} msgs). State NOT updated (qid={qid}).")
         else:
             print("Great Players test: failed to prepare.")
         return
 
-    # тільки понеділок
     if now.weekday() != 0:
         return
 
@@ -214,24 +476,31 @@ def main():
 
     before = now.hour * 60 + now.minute < pn.to_minutes(PUBLISH_TIME)
     if before:
-        # готуємо заздалегідь
         if not state.get("messages"):
-            state["messages"] = prepare(run_start) or []
+            messages, qid, title = prepare(run_start)
+            state["messages"] = messages or []
+            state["current_qid"] = qid
+            state["current_title"] = title
             save_state(state)
         return
 
-    # час публікації
-    messages = state.get("messages") or prepare(run_start)
+    messages = state.get("messages")
+    qid = state.get("current_qid", "")
+    if not messages:
+        messages, qid, title = prepare(run_start)
     if not messages:
         print("Great Players: nothing to publish")
         return
     publish(messages)
+    if qid and qid not in state["published"]:
+        state["published"].append(qid)
     state["last_date"] = today
     state["done"] = True
-    state["index"] = (state.get("index", 0) + 1) % len(PLAYERS)
     state["messages"] = []
+    state["current_qid"] = ""
+    state["current_title"] = ""
     save_state(state)
-    print(f"Great Players published ({len(messages)} msgs).")
+    print(f"Great Players published ({len(messages)} msgs). Total published: {len(state['published'])}")
 
 
 if __name__ == "__main__":
