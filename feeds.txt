@@ -3,3 +3,4 @@
 # Ниже адреса-догадки, они могут не существовать. Проверьте и оставьте рабочие.
 https://ukrfootball.ua/rss.xml
 https://www.ua-football.com/rss/all.xml
+https://rss.ua.tribuna.com/uk/football/feed.xml
