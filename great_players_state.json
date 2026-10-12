@@ -6,9 +6,514 @@
   "messages": [],
   "current_qid": "",
   "current_title": "",
-  "pool_cache": [],
-  "pool_updated": "",
-  "year_seed": null,
-  "year_order": [],
+  "pool_cache": [
+    {
+      "qid": "Q171295",
+      "name": "Pavel Nedvěd",
+      "wiki": "Pavel_Nedvěd",
+      "source": "rsssf",
+      "norm": "pavel nedvěd",
+      "year": 2003
+    },
+    {
+      "qid": "Q45901",
+      "name": "Thierry Henry",
+      "wiki": "Thierry_Henry",
+      "source": "rsssf",
+      "norm": "thierry henry",
+      "year": 2003
+    },
+    {
+      "qid": "Q483027",
+      "name": "Paolo Maldini",
+      "wiki": "Paolo_Maldini",
+      "source": "rsssf",
+      "norm": "paolo maldini",
+      "year": 2003
+    },
+    {
+      "qid": "Q41244",
+      "name": "Andriy Shevchenko",
+      "wiki": "Andriy_Shevchenko",
+      "source": "rsssf",
+      "norm": "andriy shevchenko",
+      "year": 2003
+    },
+    {
+      "qid": "Q1835",
+      "name": "Zinedine Zidane",
+      "wiki": "Zinedine_Zidane",
+      "source": "rsssf",
+      "norm": "zinedine zidane",
+      "year": 2003
+    },
+    {
+      "qid": "Q45626",
+      "name": "Ruud van Nistelrooy",
+      "wiki": "Ruud_van_Nistelrooy",
+      "source": "rsssf",
+      "norm": "ruud van nistelrooy",
+      "year": 2003
+    },
+    {
+      "qid": "Q11576",
+      "name": "Raúl",
+      "wiki": "Raúl_González",
+      "source": "rsssf",
+      "norm": "raúl",
+      "year": 2003
+    },
+    {
+      "qid": "Q429039",
+      "name": "Roberto Carlos",
+      "wiki": "Roberto_Carlos",
+      "source": "rsssf",
+      "norm": "roberto carlos",
+      "year": 2003
+    },
+    {
+      "qid": "Q68060",
+      "name": "Gianluigi Buffon",
+      "wiki": "Gianluigi_Buffon",
+      "source": "rsssf",
+      "norm": "gianluigi buffon",
+      "year": 2003
+    },
+    {
+      "qid": "Q10520",
+      "name": "David Beckham",
+      "wiki": "David_Beckham",
+      "source": "rsssf",
+      "norm": "david beckham",
+      "year": 2003
+    },
+    {
+      "qid": "Q41533",
+      "name": "Frank Lampard",
+      "wiki": "Frank_Lampard",
+      "source": "rsssf",
+      "norm": "frank lampard",
+      "year": 2005
+    },
+    {
+      "qid": "Q459830",
+      "name": "Steven Gerrard",
+      "wiki": "Steven_Gerrard",
+      "source": "rsssf",
+      "norm": "steven gerrard",
+      "year": 2005
+    },
+    {
+      "qid": "Q46896",
+      "name": "Zlatan Ibrahimović",
+      "wiki": "Zlatan_Ibrahimović",
+      "source": "rsssf",
+      "norm": "zlatan ibrahimović",
+      "year": 2005
+    },
+    {
+      "qid": "Q203451",
+      "name": "Juninho Pernambucano",
+      "wiki": "Juninho_Pernambucano",
+      "source": "rsssf",
+      "norm": "juninho pernambucano",
+      "year": 2005
+    },
+    {
+      "qid": "Q192965",
+      "name": "Juan Román Riquelme",
+      "wiki": "Juan_Román_Riquelme",
+      "source": "rsssf",
+      "norm": "juan román riquelme",
+      "year": 2005
+    },
+    {
+      "qid": "Q172211",
+      "name": "Jamie Carragher",
+      "wiki": "Jamie_Carragher",
+      "source": "rsssf",
+      "norm": "jamie carragher",
+      "year": 2005
+    },
+    {
+      "qid": "Q361244",
+      "name": "Ferenc Bene",
+      "wiki": "Ferenc_Bene",
+      "source": "rsssf",
+      "norm": "ferenc bene",
+      "year": 1966
+    },
+    {
+      "qid": "Q2830466",
+      "name": "Alan Ball",
+      "wiki": "Alan_Ball_(American_football)",
+      "source": "rsssf",
+      "norm": "alan ball",
+      "year": 1966
+    },
+    {
+      "qid": "Q388959",
+      "name": "Mario Corso",
+      "wiki": "Mario_Corso",
+      "source": "rsssf",
+      "norm": "mario corso",
+      "year": 1966
+    },
+    {
+      "qid": "Q705585",
+      "name": "Mário Coluna",
+      "wiki": "Mário_Coluna",
+      "source": "rsssf",
+      "norm": "mário coluna",
+      "year": 1966
+    },
+    {
+      "qid": "Q2547988",
+      "name": "Igor Chislenko",
+      "wiki": "Igor_Chislenko",
+      "source": "rsssf",
+      "norm": "igor chislenko",
+      "year": 1966
+    },
+    {
+      "qid": "Q612280",
+      "name": "Lev Yashin Club",
+      "wiki": "Lev_Yashin_Club",
+      "source": "rsssf",
+      "norm": "lev yashin club",
+      "year": 1963
+    },
+    {
+      "qid": "Q230046",
+      "name": "Gianni Rivera",
+      "wiki": "Gianni_Rivera",
+      "source": "rsssf",
+      "norm": "gianni rivera",
+      "year": 1963
+    },
+    {
+      "qid": "Q297271",
+      "name": "Jimmy Greaves",
+      "wiki": "Jimmy_Greaves",
+      "source": "rsssf",
+      "norm": "jimmy greaves",
+      "year": 1963
+    },
+    {
+      "qid": "Q233565",
+      "name": "Denis Law",
+      "wiki": "Denis_Law",
+      "source": "rsssf",
+      "norm": "denis law",
+      "year": 1963
+    },
+    {
+      "qid": "Q60435",
+      "name": "Karl-Heinz Schnellinger",
+      "wiki": "Karl-Heinz_Schnellinger",
+      "source": "rsssf",
+      "norm": "karl-heinz schnellinger",
+      "year": 1963
+    },
+    {
+      "qid": "Q11571",
+      "name": "Cristiano Ronaldo",
+      "wiki": "Cristiano_Ronaldo",
+      "source": "rsssf",
+      "norm": "cristiano ronaldo",
+      "year": 2008
+    },
+    {
+      "qid": "Q615",
+      "name": "Lionel Messi",
+      "wiki": "Lionel_Messi",
+      "source": "rsssf",
+      "norm": "lionel messi",
+      "year": 2008
+    },
+    {
+      "qid": "Q42731",
+      "name": "Fernando Torres",
+      "wiki": "Fernando_Torres",
+      "source": "rsssf",
+      "norm": "fernando torres",
+      "year": 2008
+    },
+    {
+      "qid": "Q11584",
+      "name": "Iker Casillas",
+      "wiki": "Iker_Casillas",
+      "source": "rsssf",
+      "norm": "iker casillas",
+      "year": 2008
+    },
+    {
+      "qid": "Q17500",
+      "name": "Xavi Hernández",
+      "wiki": "Xavi_(footballer,_born_1980)",
+      "source": "rsssf",
+      "norm": "xavi hernández",
+      "year": 2008
+    },
+    {
+      "qid": "Q83006",
+      "name": "David Villa",
+      "wiki": "David_Villa",
+      "source": "rsssf",
+      "norm": "david villa",
+      "year": 2008
+    },
+    {
+      "qid": "Q194439",
+      "name": "Marcos Senna",
+      "wiki": "Marcos_Senna",
+      "source": "rsssf",
+      "norm": "marcos senna",
+      "year": 2008
+    },
+    {
+      "qid": "Q266613",
+      "name": "Wayne Rooney",
+      "wiki": "Wayne_Rooney",
+      "source": "rsssf",
+      "norm": "wayne rooney",
+      "year": 2008
+    },
+    {
+      "qid": "Q1918",
+      "name": "Franck Ribéry",
+      "wiki": "Franck_Ribéry",
+      "source": "rsssf",
+      "norm": "franck ribéry",
+      "year": 2008
+    },
+    {
+      "qid": "Q483309",
+      "name": "Sergio Ramos",
+      "wiki": "Sergio_Ramos",
+      "source": "rsssf",
+      "norm": "sergio ramos",
+      "year": 2008
+    },
+    {
+      "qid": "Q319368",
+      "name": "Oleh Protasov",
+      "wiki": "Oleh_Protasov",
+      "source": "rsssf",
+      "norm": "oleh protasov",
+      "year": 1985
+    },
+    {
+      "qid": "Q437341",
+      "name": "Hans-Peter Briegel",
+      "wiki": "Hans-Peter_Briegel",
+      "source": "rsssf",
+      "norm": "hans-peter briegel",
+      "year": 1985
+    },
+    {
+      "qid": "Q44464",
+      "name": "Rudi Völler",
+      "wiki": "Rudi_Völler",
+      "source": "rsssf",
+      "norm": "rudi völler",
+      "year": 1985
+    },
+    {
+      "qid": "Q461587",
+      "name": "Rafael Gordillo",
+      "wiki": "Rafael_Gordillo",
+      "source": "rsssf",
+      "norm": "rafael gordillo",
+      "year": 1985
+    },
+    {
+      "qid": "Q41235",
+      "name": "Emilio Butragueño",
+      "wiki": "Emilio_Butragueño",
+      "source": "rsssf",
+      "norm": "emilio butragueño",
+      "year": 1985
+    },
+    {
+      "qid": "Q986991",
+      "name": "Lajos Détári",
+      "wiki": "Lajos_Détári",
+      "source": "rsssf",
+      "norm": "lajos détári",
+      "year": 1985
+    },
+    {
+      "qid": "Q522325",
+      "name": "Steve Archibald",
+      "wiki": "Steve_Archibald",
+      "source": "rsssf",
+      "norm": "steve archibald",
+      "year": 1985
+    },
+    {
+      "qid": "Q529207",
+      "name": "Ronaldo",
+      "wiki": "Ronaldo_(Brazilian_footballer)",
+      "source": "rsssf",
+      "norm": "ronaldo",
+      "year": 2002
+    },
+    {
+      "qid": "Q131261",
+      "name": "Oliver Kahn",
+      "wiki": "Oliver_Kahn",
+      "source": "rsssf",
+      "norm": "oliver kahn",
+      "year": 2002
+    },
+    {
+      "qid": "Q483577",
+      "name": "Rivaldo",
+      "wiki": "Rivaldo",
+      "source": "rsssf",
+      "norm": "rivaldo",
+      "year": 2002
+    },
+    {
+      "qid": "Q68039",
+      "name": "Zbigniew Boniek",
+      "wiki": "Zbigniew_Boniek",
+      "source": "rsssf",
+      "norm": "zbigniew boniek",
+      "year": 1982
+    },
+    {
+      "qid": "Q152871",
+      "name": "Karl-Heinz Rummenigge",
+      "wiki": "Karl-Heinz_Rummenigge",
+      "source": "rsssf",
+      "norm": "karl-heinz rummenigge",
+      "year": 1982
+    },
+    {
+      "qid": "Q355923",
+      "name": "Bruno Conti",
+      "wiki": "Bruno_Conti",
+      "source": "rsssf",
+      "norm": "bruno conti",
+      "year": 1982
+    },
+    {
+      "qid": "Q180661",
+      "name": "Dino Zoff",
+      "wiki": "Dino_Zoff",
+      "source": "rsssf",
+      "norm": "dino zoff",
+      "year": 1982
+    },
+    {
+      "qid": "Q44389",
+      "name": "Bernd Schuster",
+      "wiki": "Bernd_Schuster",
+      "source": "rsssf",
+      "norm": "bernd schuster",
+      "year": 1982
+    },
+    {
+      "qid": "Q379326",
+      "name": "Giancarlo Antognoni",
+      "wiki": "Giancarlo_Antognoni",
+      "source": "rsssf",
+      "norm": "giancarlo antognoni",
+      "year": 1982
+    },
+    {
+      "qid": "Q453640",
+      "name": "Bruno Pezzey",
+      "wiki": "Bruno_Pezzey",
+      "source": "rsssf",
+      "norm": "bruno pezzey",
+      "year": 1982
+    },
+    {
+      "qid": "Q44458",
+      "name": "Paul Breitner",
+      "wiki": "Paul_Breitner",
+      "source": "rsssf",
+      "norm": "paul breitner",
+      "year": 1982
+    },
+    {
+      "qid": "Q5546097",
+      "name": "George Weah Jr.",
+      "wiki": "George_Weah_Jr.",
+      "source": "rsssf",
+      "norm": "george weah jr.",
+      "year": 1995
+    }
+  ],
+  "pool_updated": "2026-10-12",
+  "year_seed": 5256445,
+  "year_order": [
+    2003,
+    1996,
+    2005,
+    1972,
+    2021,
+    1994,
+    1992,
+    1988,
+    2007,
+    2023,
+    1981,
+    1973,
+    1987,
+    1978,
+    1970,
+    1966,
+    1963,
+    2009,
+    1968,
+    1983,
+    1993,
+    2000,
+    1969,
+    2004,
+    1990,
+    1961,
+    1999,
+    2008,
+    1962,
+    1964,
+    1974,
+    1967,
+    1977,
+    1956,
+    1986,
+    1984,
+    1958,
+    1980,
+    2017,
+    2006,
+    1985,
+    2002,
+    1976,
+    2024,
+    2001,
+    1960,
+    1965,
+    1997,
+    1957,
+    1991,
+    2018,
+    1998,
+    1989,
+    1975,
+    2016,
+    1982,
+    1995,
+    2022,
+    1979,
+    2025,
+    1971,
+    1959,
+    2019
+  ],
   "phase": "rsssf"
 }
