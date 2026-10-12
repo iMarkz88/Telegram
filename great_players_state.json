@@ -1,12 +1,14 @@
 {
-  "published": [
-    "Q615"
-  ],
-  "last_date": "2026-10-12",
-  "done": true,
+  "published": [],
+  "published_names": [],
+  "last_date": "",
+  "done": false,
   "messages": [],
   "current_qid": "",
   "current_title": "",
   "pool_cache": [],
-  "pool_updated": ""
+  "pool_updated": "",
+  "year_seed": null,
+  "year_order": [],
+  "phase": "rsssf"
 }
