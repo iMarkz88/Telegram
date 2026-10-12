@@ -1,20 +1,16 @@
 {
-  "published": [],
-  "published_names": [],
-  "last_date": "",
-  "done": false,
+  "published": [
+    "Q171295"
+  ],
+  "published_names": [
+    "pavel nedvěd"
+  ],
+  "last_date": "2026-10-12",
+  "done": true,
   "messages": [],
   "current_qid": "",
   "current_title": "",
   "pool_cache": [
-    {
-      "qid": "Q171295",
-      "name": "Pavel Nedvěd",
-      "wiki": "Pavel_Nedvěd",
-      "source": "rsssf",
-      "norm": "pavel nedvěd",
-      "year": 2003
-    },
     {
       "qid": "Q45901",
       "name": "Thierry Henry",
