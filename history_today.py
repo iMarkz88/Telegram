@@ -25,7 +25,7 @@ import quiz
 CHANNEL = os.environ.get("TELEGRAM_CHANNEL", "@football_90_pluss")
 DIGEST_TIME = os.environ.get("DIGEST_TIME", "09:00")             # Kyiv time
 DIGEST_ITEMS = int(os.environ.get("DIGEST_ITEMS", "12"))         # about this many facts
-DIGEST_MIN_ITEMS = int(os.environ.get("DIGEST_MIN_ITEMS", "5"))  # fewer facts -> do not publish
+DIGEST_MIN_ITEMS = int(os.environ.get("DIGEST_MIN_ITEMS", "3"))  # fewer facts -> do not publish
 MAX_ATTEMPTS = 8            # after DIGEST_TIME: how many runs may try before the day is skipped
 TG_LIMIT = 3900             # Telegram allows 4096 characters per message
 STATE_FILE = Path("digest_state.json")
@@ -57,7 +57,9 @@ FOOT_NO = re.compile(
     r"ladies.? football|girls.? football|women.?s team|women.?s national|"
     r"women.?s world cup|women.?s champions|women.?s euro|"
     r"\bwomen\b.*\bfootball|\bwomen\b.*\bsoccer|"
-    r"handball|water polo|futsal(?!.*men)",
+    r"handball|water polo|futsal(?!.*men)|"
+    r"OSCE|Helsinki Final Act|treaty|parliament|election|president of|"
+    r"signed the|peace accord|diplomatic",
     re.I,
 )
 
@@ -101,7 +103,7 @@ def people_query(kind, month, day, ukrainian=False):
         if ukrainian else ""
     )
     langs = "uk,en" if ukrainian else "en,mul"
-    min_links = 5 if ukrainian else 12
+    min_links = 8 if ukrainian else 20
     return f"""
 SELECT ?p ?pLabel ?pDescription ?date ?sl WHERE {{
   VALUES ?occ {{ wd:Q937857 wd:Q628099 }}
@@ -223,13 +225,175 @@ def collect(month, day):
             if it["qid"] and it["qid"] in known:
                 continue
             items.append(it)
-    return items
+
+    # збагачуємо біографії клубами/нагородами (лише people з qid)
+    enriched = []
+    for it in items:
+        if it["kind"] in ("birth", "death") and it.get("qid"):
+            try:
+                it = enrich_person(it)
+                time.sleep(0.15)
+            except Exception as e:
+                print(f"  enrich {it.get('name')}: {e}")
+        enriched.append(it)
+    return enriched
+
+
+
+def enrich_person(item):
+    """Додає клуби, позицію, збірну, нагороди; для зірок — ще summary з Вікіпедії."""
+    qid = item.get("qid") or ""
+    if not qid or item["kind"] == "event":
+        return item
+    query = f"""
+    SELECT ?clubLabel ?awardLabel ?posLabel ?nlLabel WHERE {{
+      OPTIONAL {{
+        wd:{qid} wdt:P54 ?club .
+        ?club rdfs:label ?clubLabel . FILTER(LANG(?clubLabel) = "en")
+      }}
+      OPTIONAL {{
+        wd:{qid} wdt:P166 ?award .
+        ?award rdfs:label ?awardLabel . FILTER(LANG(?awardLabel) = "en")
+      }}
+      OPTIONAL {{
+        wd:{qid} wdt:P413 ?pos .
+        ?pos rdfs:label ?posLabel . FILTER(LANG(?posLabel) = "en")
+      }}
+      OPTIONAL {{
+        wd:{qid} wdt:P1447 ?nl .
+        ?nl rdfs:label ?nlLabel . FILTER(LANG(?nlLabel) = "en")
+      }}
+    }}
+    LIMIT 40
+    """
+    try:
+        rows = run_sparql(query)
+    except Exception:
+        rows = []
+    clubs, awards, positions, nations = [], [], [], []
+    seen = {"c": set(), "a": set(), "p": set(), "n": set()}
+    for b in rows:
+        if "clubLabel" in b:
+            c = b["clubLabel"]["value"]
+            if c not in seen["c"]:
+                seen["c"].add(c)
+                clubs.append(c)
+        if "awardLabel" in b:
+            a = b["awardLabel"]["value"]
+            if a not in seen["a"]:
+                seen["a"].add(a)
+                awards.append(a)
+        if "posLabel" in b:
+            pos = b["posLabel"]["value"]
+            if pos not in seen["p"]:
+                seen["p"].add(pos)
+                positions.append(pos)
+        if "nlLabel" in b:
+            n = b["nlLabel"]["value"]
+            if n not in seen["n"]:
+                seen["n"].add(n)
+                nations.append(n)
+
+    wiki_bit = ""
+    # для відомих (багато sitelinks) — короткий extract з enwiki
+    if item.get("score", 0) >= 20 or len(clubs) >= 1:
+        try:
+            tr = run_sparql(f"""
+            SELECT ?title WHERE {{
+              ?s schema:about wd:{qid} ;
+                 schema:isPartOf <https://en.wikipedia.org/> ;
+                 schema:name ?title .
+            }} LIMIT 1
+            """)
+            if tr:
+                wtitle = tr[0]["title"]["value"].replace(" ", "_")
+                wr = requests.get(
+                    f"https://en.wikipedia.org/api/rest_v1/page/summary/{wtitle}",
+                    headers=WIKI_HEADERS,
+                    timeout=20,
+                )
+                if wr.ok:
+                    extract = (wr.json().get("extract") or "")[:450]
+                    if extract:
+                        wiki_bit = extract
+        except Exception as e:
+            print(f"  wiki summary {qid}: {e}")
+
+    extra = []
+    if positions:
+        extra.append("position: " + ", ".join(positions[:2]))
+    if nations:
+        extra.append("national team: " + ", ".join(nations[:2]))
+    if clubs:
+        extra.append("clubs: " + ", ".join(clubs[:10]))
+    if awards:
+        extra.append("honours: " + ", ".join(awards[:8]))
+    if wiki_bit:
+        extra.append("bio: " + wiki_bit)
+
+    if extra:
+        base = item.get("desc") or ""
+        item["desc"] = (base + "; " if base else "") + "; ".join(extra)
+        item["score"] = item.get("score", 0) + len(clubs) + len(awards) * 2 + (5 if wiki_bit else 0)
+    return item
+
+
+def is_thin_person(item):
+    """Занадто сухий запис: лише «footballer» без клубів/досягнень."""
+    if item["kind"] == "event":
+        return False
+    d = (item.get("desc") or "").lower()
+    if "clubs:" in d or "awards:" in d:
+        return False
+    # generic one-liners
+    if re.fullmatch(r".*\b(footballer|soccer player|manager|coach)\b\.?", d.strip()):
+        return True
+    if len(d) < 25:
+        return True
+    return False
 
 
 # ------------------------------------------------------------------ selection
 
+
+def verify_on_this_day(item, month, day):
+    """Додаткова перевірка: факт справді прив'язаний до цього дня.
+    Wikidata people вже відфільтровані MONTH/DAY у SPARQL.
+    Для Wikipedia events — рік і текст мають бути, і не виглядати як інша дата.
+    """
+    if item["kind"] in ("birth", "death"):
+        # qid + sparql уже гарантують місяць/день; без qid (wiki-only) — обережніше
+        if not item.get("qid") and not item.get("text") and not item.get("desc"):
+            return False
+        return not is_thin_person(item) or item.get("score", 0) >= 25
+    # event
+    text = item.get("text") or ""
+    if len(text) < 40:
+        return False
+    # відсікаємо явні згадки інших місяців у тексті (груба евристика)
+    other = []
+    months_en = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ]
+    cur = months_en[month - 1]
+    for i, mname in enumerate(months_en, 1):
+        if i == month:
+            continue
+        if re.search(rf"\b{mname}\b", text):
+            # якщо є інший місяць і немає поточного — підозріло
+            if not re.search(rf"\b{cur}\b", text) and not re.search(rf"\b{day}\b", text):
+                other.append(mname)
+    if other:
+        print(f"  event dropped (other month in text): {text[:60]}...")
+        return False
+    return True
+
+
 def select(items, total):
-    """Сильный приоритет событиям. Украинцы без принудительного включения."""
+    """Тільки цікаві підтверджені факти. Краще 3–4 сильних, ніж 12 сухих.
+    Сухі «народився — національність футболіст» НЕ додаємо для набиття обсягу.
+    """
     items = list(items)
     chosen = []
 
@@ -243,23 +407,23 @@ def select(items, total):
 
     by_score = lambda xs: sorted(xs, key=lambda i: -i["score"])
 
-    events = [i for i in items if i["kind"] == "event"]
-    births = [i for i in items if i["kind"] == "birth"]
-    deaths = [i for i in items if i["kind"] == "death"]
+    events = [i for i in items if i["kind"] == "event" and len((i.get("text") or "")) >= 40]
+    rich_births = [i for i in items if i["kind"] == "birth" and not is_thin_person(i)]
+    rich_deaths = [i for i in items if i["kind"] == "death" and not is_thin_person(i)]
 
-    # 1. Сначала берём максимум интересных событий
-    take(events, 7)
-
-    # 2. Рождения (известные игроки/тренеры)
-    take(by_score(births), 4)
-
-    # 3. Смерти
-    take(by_score(deaths), 3)
-
-    # 4. Добираем остаток чем угодно
-    take(by_score([i for i in items if i not in chosen]), total)
+    # 1. Події з нормальним текстом
+    take(events, min(8, total))
+    # 2. Змістовні народження / смерті
+    take(by_score(rich_births), min(5, total - len(chosen)))
+    take(by_score(rich_deaths), min(3, total - len(chosen)))
+    # 3. Ще з «товстих», якщо є місце
+    rest_rich = [i for i in items if i not in chosen and not is_thin_person(i)]
+    take(by_score(rest_rich), total - len(chosen))
+    # Навмисно НЕ беремо thin — краще менше фактів
 
     return sorted(chosen, key=lambda i: i["year"])
+
+
 
 
 # ------------------------------------------------------------------ AI formatting (checked by code)
@@ -270,7 +434,7 @@ def numbers(s):
 
 def line_ok(item, text):
     src = numbers(f"{item['year']} {item['text']} {item['desc']} {item['name']}")
-    if not (20 <= len(text) <= 550) or not numbers(text) <= src:
+    if not (40 <= len(text) <= 550) or not numbers(text) <= src:
         return False
     low = text.lower()
     if item["kind"] == "birth" and "народив" not in low:
@@ -279,13 +443,23 @@ def line_ok(item, text):
         return False
     if quiz.has_foreign_cyrillic(text):
         return False
-    name = item["name"]
-    if item["kind"] in ("birth", "death") and name:
-        latin = re.search(r"[A-Za-z]", name) is not None
-        if not item["ua"] and latin and name not in text:
-            return False
-        if item["ua"] and not latin and name not in text:
-            return False
+    # відсікаємо сухі рядки типу «Народився X — англійський футболіст.»
+    if item["kind"] in ("birth", "death"):
+        stripped = re.sub(r"народився|помер|загинув", "", low)
+        if re.search(r"^[^—–-]*[—–-]\s*(англійський|німецький|французький|іспанський|"
+                     r"італійський|бразильський|аргентинський|український|нідерландський|"
+                     r"португальський|японський|грецький|чеський|бельгійський|валлійський|"
+                     r"латвійський|нігерійський)\s+футболіст\.?$", stripped.strip()):
+            # дозволити лише якщо в джерелі реально немає нічого більше
+            if not is_thin_person(item):
+                return False
+        name = item["name"]
+        if name:
+            latin = re.search(r"[A-Za-z]", name) is not None
+            if not item["ua"] and latin and name not in text:
+                return False
+            if item["ua"] and not latin and name not in text:
+                return False
     return True
 
 
@@ -397,6 +571,8 @@ def prepare(now, run_start):
     month, day = now.month, now.day
     items = collect(month, day)
     print(f"Digest: {len(items)} candidate fact(s) found for {day:02d}.{month:02d}")
+    items = [it for it in items if verify_on_this_day(it, month, day)]
+    print(f"Digest: {len(items)} after on-this-day verify")
     if len(items) < DIGEST_MIN_ITEMS:
         return []
     chosen = select(items, DIGEST_ITEMS)
