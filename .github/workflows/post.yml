@@ -60,7 +60,7 @@ jobs:
           DIGEST_ITEMS: "12"
           DIGEST_FORCE: ${{ inputs.digest_now }}
           QUIET_FROM: "21:30"
-          QUIET_TO: "07:30"
+          QUIET_TO: "07:00"
           RETRY_WINDOW_MIN: "3"
           RETRY_PAUSE_SEC: "60"
         run: python history_today.py
@@ -80,7 +80,7 @@ jobs:
           TELEGRAM_CHANNEL: "@football_90_pluss"
           PLAYERS_FORCE: ${{ inputs.players_now }}
           QUIET_FROM: "21:30"
-          QUIET_TO: "07:30"
+          QUIET_TO: "07:00"
           RETRY_WINDOW_MIN: "3"
           RETRY_PAUSE_SEC: "60"
         run: python great_players.py
@@ -100,7 +100,7 @@ jobs:
           TELEGRAM_CHANNEL: "@football_90_pluss"
           CLUBS_FORCE: ${{ inputs.clubs_now }}
           QUIET_FROM: "21:30"
-          QUIET_TO: "07:30"
+          QUIET_TO: "07:00"
           RETRY_WINDOW_MIN: "3"
           RETRY_PAUSE_SEC: "60"
         run: python great_clubs.py
@@ -123,7 +123,7 @@ jobs:
           HISTORY_KEEP_DAYS: "730"
           QUIZ_FORCE: ${{ inputs.quiz_now }}
           QUIET_FROM: "21:30"
-          QUIET_TO: "07:30"
+          QUIET_TO: "07:00"
           RETRY_WINDOW_MIN: "3"
           RETRY_PAUSE_SEC: "60"
         run: python quiz.py
@@ -145,7 +145,7 @@ jobs:
           MAX_PER_RUN: "3"
           POST_INTERVAL_MIN: "20"
           QUIET_FROM: "21:30"
-          QUIET_TO: "07:30"
+          QUIET_TO: "07:00"
           RETRY_WINDOW_MIN: "3"
           RETRY_PAUSE_SEC: "60"
         run: python post_news.py
