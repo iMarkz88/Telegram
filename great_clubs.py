@@ -576,29 +576,45 @@ def main():
             print("Great Clubs test: failed to prepare.")
         return
 
+    # тільки п'ятниця
     if now.weekday() != 4:
         return
 
     state = load_state()
     if state.get("last_date") == today and state.get("done"):
         return
-    if pn.in_quiet_hours():
+
+    mins = now.hour * 60 + now.minute
+    pub = pn.to_minutes(PUBLISH_TIME)
+    PREPARE_START = 0 * 60 + 1   # 00:01
+    PREPARE_END = 6 * 60 + 30    # 06:30
+
+    # ---- до 13:00: тільки підготовка (quiet hours НЕ блокують) ----
+    if mins < pub:
+        if state.get("messages"):
+            print("Great Clubs: already prepared, waiting for", PUBLISH_TIME)
+            return
+        # основне вікно 00:01–06:30; якщо не встигли — продовжуємо до 13:00
+        if mins < PREPARE_START:
+            print("Great Clubs: before 00:01, skip")
+            return
+        print(f"Great Clubs: preparing (mins={mins}, window 00:01–06:30 preferred, until 13:00 ok)...")
+        messages, qid, title = prepare(run_start)
+        state["messages"] = messages or []
+        state["current_qid"] = qid
+        state["current_title"] = title
+        save_state(state)
+        if messages:
+            print("Great Clubs: prepared, waiting for", PUBLISH_TIME)
+        else:
+            print("Great Clubs: not ready yet, will retry until", PUBLISH_TIME)
         return
 
-    before = now.hour * 60 + now.minute < pn.to_minutes(PUBLISH_TIME)
-
-    if before:
-        if not state.get("messages"):
-            messages, qid, title = prepare(run_start)
-            state["messages"] = messages or []
-            state["current_qid"] = qid
-            state["current_title"] = title
-            save_state(state)
-        return
-
+    # ---- з 13:00: публікація ----
     messages = state.get("messages")
     qid = state.get("current_qid", "")
     if not messages:
+        # запас: якщо всю ніч не вийшло — ще одна спроба
         messages, qid, title = prepare(run_start)
 
     if not messages:

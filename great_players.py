@@ -607,23 +607,36 @@ def main():
             print("Great Players test: failed.")
         return
 
+    # тільки понеділок
     if now.weekday() != 0:
         return
 
     state = load_state()
     if state.get("last_date") == today and state.get("done"):
         return
-    if pn.in_quiet_hours():
-        return
 
-    before = now.hour * 60 + now.minute < pn.to_minutes(PUBLISH_TIME)
-    if before:
-        if not state.get("messages"):
-            messages, qid, title = prepare(run_start)
-            state["messages"] = messages or []
-            state["current_qid"] = qid
-            state["current_title"] = title
-            save_state(state)
+    mins = now.hour * 60 + now.minute
+    pub = pn.to_minutes(PUBLISH_TIME)
+    PREPARE_START = 0 * 60 + 1   # 00:01
+    PREPARE_END = 6 * 60 + 30    # 06:30
+
+    if mins < pub:
+        if state.get("messages"):
+            print("Great Players: already prepared, waiting for", PUBLISH_TIME)
+            return
+        if mins < PREPARE_START:
+            print("Great Players: before 00:01, skip")
+            return
+        print(f"Great Players: preparing (mins={mins}, window 00:01–06:30 preferred, until 13:00 ok)...")
+        messages, qid, title = prepare(run_start)
+        state["messages"] = messages or []
+        state["current_qid"] = qid
+        state["current_title"] = title
+        save_state(state)
+        if messages:
+            print("Great Players: prepared, waiting for", PUBLISH_TIME)
+        else:
+            print("Great Players: not ready yet, will retry until", PUBLISH_TIME)
         return
 
     messages = state.get("messages")

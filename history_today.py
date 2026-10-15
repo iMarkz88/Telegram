@@ -480,31 +480,44 @@ def main():
     state = load_state()
     if state["day"] != today:
         state = {"day": today, "messages": [], "done": False, "attempts": 0, "last_try": 0}
-    if state["done"] or pn.in_quiet_hours():
+    if state["done"]:
         save_state(state)
         return
 
-    before_time = now.hour * 60 + now.minute < pn.to_minutes(DIGEST_TIME)
+    mins = now.hour * 60 + now.minute
+    dig = pn.to_minutes(DIGEST_TIME)
+    PREPARE_START = 0 * 60 + 1   # 00:01
+    PREPARE_END = 6 * 60 + 30    # 06:30
+    before_time = mins < dig
+
+    # ---- підготовка: 00:01–06:30 пріоритет; якщо не встигли — до DIGEST_TIME ----
+    # quiet hours НЕ блокують підготовку
     if not state["messages"]:
-        if before_time and time.time() - state["last_try"] < 600:
+        if mins < PREPARE_START:
+            save_state(state)
+            return
+        # не молотити AI частіше ніж раз на 10 хв
+        if time.time() - state.get("last_try", 0) < 600:
             save_state(state)
             return
         state["last_try"] = time.time()
         if not before_time:
-            state["attempts"] += 1
+            state["attempts"] = state.get("attempts", 0) + 1
+        print(f"Digest: preparing (mins={mins})...")
         state["messages"] = prepare(now, run_start)
         print("Digest: prepared." if state["messages"] else "Digest: not ready yet.")
-        if not state["messages"] and not before_time and state["attempts"] >= MAX_ATTEMPTS:
+        if not state["messages"] and not before_time and state.get("attempts", 0) >= MAX_ATTEMPTS:
             state["done"] = True
             print("Digest: too many failed attempts, skipping today.")
         save_state(state)
-        if before_time or not state["messages"]:
-            return
-    elif before_time:
+        return
+
+    if before_time:
         print("Digest: ready, waiting for", DIGEST_TIME)
         save_state(state)
         return
 
+    # ---- публікація після DIGEST_TIME (09:00) ----
     publish(state["messages"])
     state["done"] = True
     save_state(state)

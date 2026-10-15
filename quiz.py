@@ -369,22 +369,27 @@ def main():
         save_state(state)
         return
 
-    if pn.in_quiet_hours():
-        print("Quiz: quiet hours.")
-        save_state(state)
-        return
     if state["posted"] >= QUIZZES_PER_DAY:
         print(f"Quiz: all {QUIZZES_PER_DAY} quizzes already published today.")
         save_state(state)
         return
 
-    # ---- before QUIZ_TIME: prepare one quiz per run
-    if now.hour * 60 + now.minute < pn.to_minutes(QUIZ_TIME):
+    mins = now.hour * 60 + now.minute
+    quiz_t = pn.to_minutes(QUIZ_TIME)
+    PREPARE_START = 0 * 60 + 1   # 00:01
+    PREPARE_END = 6 * 60 + 30    # 06:30
+
+    # ---- до QUIZ_TIME: готуємо (quiet hours НЕ блокують; пріоритет 00:01–06:30)
+    if mins < quiz_t:
         need = QUIZZES_PER_DAY - state["posted"] - len(state["ready"])
         if need <= 0:
             print(f"Quiz: {len(state['ready'])}/{QUIZZES_PER_DAY} ready, waiting for {QUIZ_TIME}.")
-        elif not prepare_one():
-            print("Quiz: could not prepare one now, will try on the next run.")
+        elif mins < PREPARE_START:
+            print("Quiz: before 00:01, skip prepare")
+        else:
+            # після 06:30 теж можна, якщо ще не набрали QUIZZES_PER_DAY
+            if not prepare_one():
+                print("Quiz: could not prepare one now, will try on the next run.")
         save_state(state)
         return
 
