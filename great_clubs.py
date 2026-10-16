@@ -372,7 +372,17 @@ def load_state():
         "pool_updated": "",
     }
     if STATE_FILE.exists():
-        state.update(json.loads(STATE_FILE.read_text(encoding="utf-8")))
+        raw = STATE_FILE.read_text(encoding="utf-8").strip()
+        if raw:
+            try:
+                state.update(json.loads(raw))
+            except json.JSONDecodeError as e:
+                print(f"  great_clubs_state.json broken ({e}), starting fresh state")
+                # backup broken file
+                try:
+                    STATE_FILE.rename(STATE_FILE.with_suffix(".json.broken"))
+                except Exception:
+                    pass
     state["published"] = list(dict.fromkeys(state.get("published", [])))
     return state
 
