@@ -41,11 +41,28 @@ MONTHS = ["січня", "лютого", "березня", "квітня", "тр�
 # Тільки чоловічий футбол
 FOOT_YES = re.compile(
     r"football\w*|soccer|FIFA|UEFA|Premier League|Champions League|"
-    r"Europa League|Serie A|La Liga|Bundesliga|Ligue 1|FA Cup|Ballon d.Or|"
-    r"\bclub\b|\bmatch\b|\bstadium\b|\bplayer\b|\bgoal\b|\bteam\b|"
-    r"\bleague\b|\bcup\b|\bfinal\b|\btournament\b|\bcoach\b|\breferee\b|"
-    r"World Cup|European Championship|Olympic|Football Association|"
-    r"footballer|manager|coach",
+    r"Europa League|Serie A|La Liga|Bundesliga|Ligue 1|FA Cup|Ballon d.?Or|"
+    r"World Cup|European Championship|Football Association|"
+    r"footballer|\bfootball club\b|\bfootball match\b|\bfootball league\b|"
+    r"association football|\bgoalkeeper\b|\bstriker\b|\bmidfielder\b|"
+    r"\bdefender\b|\bwinger\b|\bfootball manager\b|\bfootball coach\b|"
+    r"transfer window|hat-?trick|own goal|penalty shoot-?out|"
+    r"FA Cup|League Cup|Copa del Rey|Coppa Italia|DFB-Pokal|"
+    r"\bclub\b.*\b(win|won|defeat|beat|play)|"
+    r"\bmatch\b.*\b(football|soccer|cup|league)|"
+    r"\bstadium\b",
+    re.I,
+)
+
+# Для подій — жорсткіший «футбольний» сигнал (без голого team/player/Olympic)
+EVENT_YES = re.compile(
+    r"football\w*|soccer|FIFA|UEFA|Premier League|Champions League|"
+    r"Europa League|Serie A|La Liga|Bundesliga|Ligue 1|FA Cup|Ballon d.?Or|"
+    r"World Cup|European Championship|association football|"
+    r"football club|football match|football league|footballer|"
+    r"\bgoalkeeper\b|hat-?trick|penalty|own goal|"
+    r"Copa del Rey|Coppa Italia|DFB-Pokal|League Cup|"
+    r"relegat|promot(?:ed|ion).*league|won the (league|cup|championship)",
     re.I,
 )
 
@@ -59,7 +76,14 @@ FOOT_NO = re.compile(
     r"\bwomen\b.*\bfootball|\bwomen\b.*\bsoccer|"
     r"handball|water polo|futsal(?!.*men)|"
     r"OSCE|Helsinki Final Act|treaty|parliament|election|president of|"
-    r"signed the|peace accord|diplomatic",
+    r"signed the|peace accord|diplomatic|"
+    # олімпіада / легка атлетика / інші види без футболу
+    r"Black Power|raised fist|medal (ceremony|podium)|"
+    r"track and field|\bsprint(?:er|ing)?\b|\bmarathon\b|\bhurdles\b|"
+    r"\bswimming\b|\bgymnastics\b|\bboxing\b|\bwrestling\b|"
+    r"Olympic (gold|silver|bronze|medal|Games).*(?!football)(?!soccer)|"
+    r"(?<!football )(?<!soccer )Olympic (team|athlete|sprinter)|"
+    r"\bFormula\s*1\b|\bNASCAR\b|\bcycling\b|Tour de France",
     re.I,
 )
 
@@ -180,10 +204,21 @@ def wikipedia_feed(api_kind, month, day):
         text, year = e.get("text", ""), e.get("year")
         if not text or not isinstance(year, int) or year < 1860:
             continue
-        if not FOOT_YES.search(text) or FOOT_NO.search(text):
+        if FOOT_NO.search(text):
             continue
+        if api_kind == "events":
+            if not EVENT_YES.search(text):
+                continue
+        else:
+            if not FOOT_YES.search(text):
+                continue
         # дополнительный отсев женского футбола
         if re.search(r"\bwomen\b|\bfemale\b|\bladies\b|\bgirls\b", text, re.I):
+            continue
+        # олімпійські події — лише якщо явно футбол
+        if re.search(r"\bOlympic", text, re.I) and not re.search(
+            r"football|soccer|FIFA", text, re.I
+        ):
             continue
 
         qid = ""
@@ -334,26 +369,60 @@ def enrich_person(item):
     if extra:
         base = item.get("desc") or ""
         item["desc"] = (base + "; " if base else "") + "; ".join(extra)
-        item["score"] = item.get("score", 0) + len(clubs) + len(awards) * 2 + (5 if wiki_bit else 0)
+        item["score"] = item.get("score", 0) + min(len(clubs), 3) + len(awards) * 5 + (8 if wiki_bit else 0)
     return item
 
 
+def has_trophy_signal(text: str) -> bool:
+    """Чи є в тексті ознаки титулів / досягнень (не просто список клубів)."""
+    if not text:
+        return False
+    tlow = text.lower()
+    if "honours:" in tlow or "awards:" in tlow:
+        # є блок нагород з Wikidata
+        after = tlow.split("honours:")[-1] if "honours:" in tlow else tlow.split("awards:")[-1]
+        # якщо після мітки хоч щось змістовне
+        if len(after.strip()) > 5:
+            return True
+    keys = re.compile(
+        r"\b(won|win|winner|champion|championship|title|titles|trophy|cup|"
+        r"ballond.?or|ballon d.?or|golden boot|world cup|premier league|"
+        r"serie a|la liga|bundesliga|champions league|uefa|fifa|"
+        r"виграв|чемпіон|титул|кубок|золотий м.?яч|нагород|medal|order of)\b",
+        re.I,
+    )
+    return bool(keys.search(text))
+
+
 def is_thin_person(item):
-    """Занадто сухий запис: лише «footballer» без клубів/досягнень."""
+    """Без трофеїв/реальних досягнень — пропускаємо (не тягнемо «просто грав у клубах»)."""
     if item["kind"] == "event":
         return False
     d = (item.get("desc") or "").lower()
-    if "clubs:" in d or "awards:" in d:
+    # є явні трофеї / нагороди / чемпіонства
+    has_honour = bool(re.search(
+        r"honours:|awards:|champion|championship|winner|won the|cup winner|"
+        r"premier league|serie a|la liga|bundesliga|ligue 1|world cup|"
+        r"champions league|europa league|ballon|golden boot|fifa|"
+        r"титул|чемпіон|кубок|переможець",
+        d, re.I,
+    ))
+    has_bio_trophy = bool(re.search(
+        r"won |winning |title|titles|trophy|trophies|medal|"
+        r"world cup|champions league|european cup|copa|pokal",
+        d, re.I,
+    ))
+    if has_honour or has_bio_trophy:
         return False
-    # generic one-liners
+    # лише clubs: без титулів — вважаємо thin
+    if "clubs:" in d and "honours:" not in d and "awards:" not in d:
+        return True
     if re.fullmatch(r".*\b(footballer|soccer player|manager|coach)\b\.?", d.strip()):
         return True
-    if len(d) < 25:
+    if len(d) < 40:
         return True
-    return False
+    return True  # за замовчуванням без доказів досягнень — не беремо
 
-
-# ------------------------------------------------------------------ selection
 
 
 def verify_on_this_day(item, month, day):
@@ -369,6 +438,10 @@ def verify_on_this_day(item, month, day):
     # event
     text = item.get("text") or ""
     if len(text) < 40:
+        return False
+    if FOOT_NO.search(text) or not EVENT_YES.search(text):
+        return False
+    if re.search(r"\bOlympic", text, re.I) and not re.search(r"football|soccer|FIFA", text, re.I):
         return False
     # відсікаємо явні згадки інших місяців у тексті (груба евристика)
     other = []
@@ -408,18 +481,20 @@ def select(items, total):
     by_score = lambda xs: sorted(xs, key=lambda i: -i["score"])
 
     events = [i for i in items if i["kind"] == "event" and len((i.get("text") or "")) >= 40]
+    # лише з трофеями/досягненнями (is_thin_person відсікає «просто грав»)
     rich_births = [i for i in items if i["kind"] == "birth" and not is_thin_person(i)]
     rich_deaths = [i for i in items if i["kind"] == "death" and not is_thin_person(i)]
 
-    # 1. Події з нормальним текстом
-    take(events, min(8, total))
-    # 2. Змістовні народження / смерті
-    take(by_score(rich_births), min(5, total - len(chosen)))
-    take(by_score(rich_deaths), min(3, total - len(chosen)))
-    # 3. Ще з «товстих», якщо є місце
-    rest_rich = [i for i in items if i not in chosen and not is_thin_person(i)]
-    take(by_score(rest_rich), total - len(chosen))
-    # Навмисно НЕ беремо thin — краще менше фактів
+    # 1. Події — головний фокус
+    take(events, total)
+    # 2. Народження/смерті лише з трофеями (is_thin_person вже відсік «просто клуби»)
+    slots_left = total - len(chosen)
+    if slots_left > 0:
+        # макс 2 народження + 1 смерть як добивка
+        take(by_score(rich_births), min(slots_left, 2))
+        slots_left = total - len(chosen)
+        take(by_score(rich_deaths), min(slots_left, 1))
+    # без thin і без «набити список»
 
     return sorted(chosen, key=lambda i: i["year"])
 
@@ -499,20 +574,23 @@ def format_with_ai(items, run_start):
         "кілька секунд після стартового свистка. Естонська команда не вийшла на поле "
         "через суперечку щодо часу початку матчу та освітлення стадіону. "
         "Пізніше FIFA ухвалила рішення про проведення гри повторно.»\n\n"
-        "• type=birth — починай з «Народився», далі ім’я + хто це + 1–2 речення "
-        "про досягнення / клуби / значення (ТІЛЬКИ з даних).\n"
+        "• type=birth — починай з «Народився», ім’я, амплуа. "
+        "ГОЛОВНЕ — трофеї й досягнення, а НЕ перелік усіх клубів.\n"
+        "  Якщо в description є honours / awards / bio з титулами — обов’язково їх вкажи "
+        "(чемпіон ліги, кубок, Ліга чемпіонів, Золотий м’яч тощо) і з яким клубом/збірною.\n"
+        "  Клуби згадуй лише ті, з якими пов’язані ці успіхи (1–3), не весь список кар’єри.\n"
+        "  Якщо трофеїв у даних немає — тоді 1 речення про головний клуб і роль, без «магазину» назв.\n"
         "  Приклади:\n"
-        "  «Народився Вільям «Джек» Крейстон — майбутній футболіст і тренер Arsenal. "
-        "Він виступав за збірну Англії, а після завершення ігрової кар’єри став "
-        "менеджером Arsenal.»\n"
-        "  «Народився Петр Жеков (Болгарія) — один із найвидатніших бомбардирів "
-        "болгарського футболу. Він забив 253 голи в чемпіонаті Болгарії та здобув "
-        "європейську «Золоту бутсу» 1969 року.»\n"
-        "  «Народився Тоні Адамс (Англія) — легендарний капітан Arsenal, який провів "
-        "за клуб усю свою професійну ігрову кар’єру. Він виграв чотири чемпіонські "
-        "титули Англії та три Кубки Англії.»\n\n"
-        "• type=death — починай з «Помер», далі ім’я + хто це + коротко чим відомий "
-        "(ТІЛЬКИ з даних).\n\n"
+        "  «Народився Петр Жеков — бомбардир, володар європейської «Золотої бутси» 1969 року "
+        "після 36 голів за CSKA Sofia.»\n"
+        "  «Народився Тоні Адамс — капітан Arsenal, з яким виграв чотири чемпіонські титули "
+        "Англії та три FA Cup.»\n"
+        "  «Народився Mesut Özil — чемпіон світу 2014 у складі збірної Німеччини; "
+        "з Real Madrid вигравав La Liga.»\n\n"
+        "• type=death — починай з «Помер», ім’я, амплуа. "
+        "Знову акцент на трофеях і ролі в їх здобутті, не на довгому списку клубів.\n"
+        "  Приклад: «Помер X — захисник, з AC Milan виграв Лігу чемпіонів і Serie A.»\n"
+        "  Якщо в даних лише клуби без титулів — коротко головний клуб, без переліку всіх.\n\n"
         "=== ЖОРСТКІ ПРАВИЛА ===\n"
         "1. Використовуй ТІЛЬКИ дані з наведеного запису. Нічого не додавай і не вигадуй. "
         "Не змінюй і не додавай жодних чисел, рахунків, дат, назв клубів чи титулів.\n"
