@@ -64,7 +64,7 @@ FOOTBALL_WORDS = (
     "забарн", "довбик", "мудрик", "гол ", "голи", "воротар", "півзахисник",
     "нападник", "захисник", "уєфа", "фіфа", 
 )
-SKIP_WORDS = ("прогноз", "ставк", "букмекер", "бонус", "трансляц", "дивитись онлайн", "хто призначений на матч", "Tribuna.com", "підготовка до матчу")
+SKIP_WORDS = ("прогноз", "ставк", "букмекер", "бонус", "трансляц", "дивитись онлайн", "хто призначений на матч", "підготовка до матчу")
 # News whose TITLE contains one of these whole words are never published.
 SKIP_TITLE_RE = re.compile(r"\b(відео|видео)\b", re.IGNORECASE)
 
@@ -157,6 +157,77 @@ def is_football(item):
 
 def item_key(item):
     return hashlib.sha1(item["link"].encode()).hexdigest()[:16]
+
+
+_SCORE_RE = re.compile(r"(?<!\d)(\d{1,2})\s*[:\-–]\s*(\d{1,2})(?!\d)")
+_CLUB_SPLIT = re.compile(r"[«»\"\'(\)\[\],.;:!?/|+]+")
+
+
+def _tokens(text: str) -> set:
+    text = (text or "").lower().replace("ё", "е")
+    text = _SCORE_RE.sub(" ", text)
+    parts = _CLUB_SPLIT.sub(" ", text).split()
+    stop = {
+        "про", "для", "після", "перед", "проти", "матч", "матчу", "гри", "гру", "рахунок",
+        "перемога", "пораза", "нічия", "гол", "голи", "ліга", "європи", "чемпіонів",
+        "тур", "етап", "сезон", "команда", "клуб", "тренер", "гравець", "воротар",
+        "the", "and", "vs", "fc", "cf", "sc", "але", "що", "як", "це", "він",
+        "вона", "вони", "був", "була", "були", "стадіон", "дома", "виїзд",
+        "instagram", "коментар", "прокоментував", "сказав", "заявив",
+    }
+    out = set()
+    for w in parts:
+        w = w.strip("-–—")
+        if len(w) < 4 or w in stop or w.isdigit():
+            continue
+        out.add(w)
+    return out
+
+
+def match_fingerprint(title: str, text: str = "") -> str:
+    blob = f"{title or ''} {text or ''}"
+    scores = _SCORE_RE.findall(blob)
+    score = None
+    for a, b in scores:
+        ai, bi = int(a), int(b)
+        if ai > 20 or bi > 20:
+            continue
+        score = f"{min(ai, bi)}-{max(ai, bi)}"
+        break
+    if not score:
+        return ""
+    toks = _tokens(title) | _tokens((text or "")[:400])
+    if len(toks) < 2:
+        return ""
+    key_core = score + "|" + "|".join(sorted(toks)[:12])
+    return hashlib.sha1(key_core.encode()).hexdigest()[:20]
+
+
+def find_same_match(title: str, text: str, recent: list, hours: float = 36.0):
+    """Якщо ця гра вже була в recent — повернути запис, інакше None."""
+    blob = f"{title or ''} {text or ''}"
+    scores = _SCORE_RE.findall(blob)
+    score = None
+    for a, b in scores:
+        ai, bi = int(a), int(b)
+        if ai > 20 or bi > 20:
+            continue
+        score = f"{min(ai, bi)}-{max(ai, bi)}"
+        break
+    toks = _tokens(title) | _tokens((text or "")[:500])
+    if not score or len(toks) < 2:
+        return None
+    now = time.time()
+    for r in recent:
+        if now - r.get("ts", 0) > hours * 3600:
+            continue
+        if r.get("score") != score:
+            continue
+        common = toks & set(r.get("toks") or [])
+        if len(common) >= 2:
+            return r
+    return None
+
 
 
 ARTICLE_HEADERS = {
@@ -305,7 +376,7 @@ def ask_openai_compat(name, prompt):
         return r.json()["choices"][0]["message"]["content"].strip()
 
 
-def rewrite(title, text):
+def rewrite(title, text, omit_score=False):
     """Returns (headline, body). Raises RewriteFailed if AI is configured but all engines failed."""
     engines = []
     if GEMINI_KEY:
@@ -318,7 +389,7 @@ def rewrite(title, text):
 
     prompt = (
         "Ти редактор українського футбольного Telegram-каналу «football 90+». "
-        "Твоє завдання — перефразувати новину українською мовою, ЗБЕРІГАЮЧИ ВСІ ФАКТИ.\n\n"
+        "Твоє завдання — перефразувати новину українською мовою, ЗБЕРІГАЮЧИ ВСІ ФАКТИ.\n\nЯКЩО ЦЕ МАТЧ / РЕАКЦІЯ НА МАТЧ:\n- обов'язково вкажи команди і рахунок (наприклад: «Бенфіка» — «Селтік» 4:1);\n- де грали (дома / на виїзді / турнір), якщо є в тексті;\n- цитати гравців/тренерів — лише коротко, після факту про рахунок;\n- не роби окрему «цитату ради цитати», якщо головне — результат матчу.\n\n"
         "ЩО МОЖНА РОБИТИ:\n"
         "- перефразовувати речення своїми словами (синоніми, інший порядок слів);\n"
         "- скорочувати текст, об'єднувати речення, прибирати другорядні деталі;\n"
@@ -339,7 +410,7 @@ def rewrite(title, text):
         "- українська; іноземні назви — латиниця; українські назви — українською "
         "(Шахтар, Динамо Київ, Артем Бондаренко);\n"
         "- жива, але стримана мова без емоційних оцінок.\n\n"
-        "ОБСЯГ: 500-780 символів.\n\n"
+        "ОБСЯГ: 450-720 символів.\n\n"
         "ФОРМАТ ВІДПОВІДІ:\n"
         "Перший рядок — короткий заголовок з одним емодзі на початку. "
         "Далі порожній рядок і текст новини.\n\n"
@@ -347,6 +418,15 @@ def rewrite(title, text):
         f"ОРИГІНАЛЬНИЙ ТЕКСТ:\n{text}"
     )
     reasons = []
+    if omit_score:
+        prompt += (
+            "\n\nВАЖЛИВО — РЕЗУЛЬТАТ МАТЧУ ВЖЕ ПУБЛІКУВАВСЯ РАНІШЕ:\n"
+            "- НЕ пиши рахунок (ні 4:1, ні 2-0 тощо);\n"
+            "- НЕ повторюй, де грали (стадіон / вдома / на виїзді), якщо це лише фон;\n"
+            "- одразу переходь до суті: слова гравця/тренера, рішення, деталі новини;\n"
+            "- суперника можна згадати без рахунку («після гри з Celtic»).\n"
+        )
+
     for name, fn in engines:
         try:
             out = fn(prompt)
@@ -441,9 +521,14 @@ def load_state():
     return data
 
 
-def save_state(seen, feeds, last_post=0):
-    STATE_FILE.write_text(json.dumps(
-        {"seen": list(seen)[-1500:], "feeds": sorted(feeds), "last_post": last_post}))
+def save_state(seen, feeds, last_post=0, recent_matches=None):
+    payload = {
+        "seen": list(seen)[-1500:],
+        "feeds": sorted(feeds),
+        "last_post": last_post,
+        "recent_matches": list(recent_matches or [])[-80:],
+    }
+    STATE_FILE.write_text(json.dumps(payload, ensure_ascii=False))
 
 
 def main():
@@ -459,6 +544,7 @@ def main():
     state = state or {"seen": [], "feeds": []}
     seen = list(state["seen"])
     seen_set = set(seen)
+    recent_matches = list(state.get("recent_matches") or [])
     known_feeds = set(state["feeds"])
     last_post = float(state.get("last_post", 0))
 
@@ -496,7 +582,7 @@ def main():
             for k, _ in candidates:
                 seen.append(k); seen_set.add(k)
         print(f"Quiet hours ({QUIET_FROM}-{QUIET_TO} Kyiv): not posting.")
-        save_state(seen, known_feeds, last_post)
+        save_state(seen, known_feeds, last_post, recent_matches)
         return
 
     # Oldest first, so the channel keeps chronological order. Items that did not
@@ -536,9 +622,14 @@ def main():
                 if len(full) > len(text):
                     text = full
                 image = image or og
+            # якщо про цю гру вже писали — публікуємо, але без повторного рахунку/місця
+            same = find_same_match(it["title"], text, recent_matches, hours=36)
+            omit_score = same is not None
+            if omit_score:
+                print(f"  same match follow-up (no score/venue): {it['title'][:80]}")
             while True:  # retry the AI until it works or this item's retry window is over
                 try:
-                    head, body = rewrite(it["title"], text or it["title"])
+                    head, body = rewrite(it["title"], text or it["title"], omit_score=omit_score)
                     break
                 except RewriteFailed:
                     left = RETRY_WINDOW_MIN * 60 - (now_ts() - item_start)
@@ -549,6 +640,19 @@ def main():
                     time.sleep(RETRY_PAUSE_SEC)
             send(build_caption(head, body), image if USE_SOURCE_IMAGE else "")
             seen.append(k); seen_set.add(k)
+            sc = None
+            for a, b in _SCORE_RE.findall(f"{it['title']} {text[:400]}"):
+                ai, bi = int(a), int(b)
+                if ai <= 20 and bi <= 20:
+                    sc = f"{min(ai, bi)}-{max(ai, bi)}"
+                    break
+            recent_matches.append({
+                "fp": match_fingerprint(it["title"], text) or "",
+                "score": sc,
+                "toks": list(_tokens(it["title"]) | _tokens(text[:400])),
+                "ts": now_ts(),
+            })
+            recent_matches[:] = recent_matches[-80:]
             last_post = now_ts()
             posted_now += 1
             failed_in_row = 0
@@ -564,7 +668,7 @@ def main():
         except Exception as e:
             print("  failed, will retry next run:", e)
 
-    save_state(seen, known_feeds, last_post)
+    save_state(seen, known_feeds, last_post, recent_matches)
     print(f"Done. Published this run: {posted_now}; still waiting in the queue: "
           f"{max(0, len(queue) - posted_now)}.")
 
