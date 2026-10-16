@@ -28,6 +28,7 @@ import post_news as pn
 import quiz
 
 CHANNEL = os.environ.get("TELEGRAM_CHANNEL", "@football_90_pluss")
+CLUBS_IMAGE = os.environ.get("CLUBS_IMAGE", "great_club.jpg")
 PUBLISH_TIME = "13:00"
 STATE_FILE = Path("great_clubs_state.json")
 TG_LIMIT = 3900
@@ -593,7 +594,46 @@ def send_message(text: str):
         r.raise_for_status()
 
 
-def publish(messages: list[str]):
+def publish(messages: list[str], ua_title: str = ""):
+    """Перше повідомлення — з картинкою; далі лише текст."""
+    api = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}"
+    img = CLUBS_IMAGE
+    if img and os.path.exists(img) and messages:
+        # caption Telegram ≤ 1024; якщо перший текст довший — фото з коротким підписом, потім текст
+        first = messages[0]
+        if len(first) <= 1024:
+            with open(img, "rb") as f:
+                r = requests.post(
+                    f"{api}/sendPhoto",
+                    data={
+                        "chat_id": CHANNEL,
+                        "caption": first,
+                        "parse_mode": "HTML",
+                    },
+                    files={"photo": f},
+                    timeout=60,
+                )
+            if r.ok:
+                messages = messages[1:]
+            else:
+                print("  sendPhoto failed, fallback text:", r.text[:200])
+        else:
+            caption = f"🏟️ <b>Великі клуби</b>\n📅 {html.escape(ua_title or '', quote=False)}"
+            with open(img, "rb") as f:
+                r = requests.post(
+                    f"{api}/sendPhoto",
+                    data={
+                        "chat_id": CHANNEL,
+                        "caption": caption,
+                        "parse_mode": "HTML",
+                    },
+                    files={"photo": f},
+                    timeout=60,
+                )
+            if not r.ok:
+                print("  sendPhoto failed:", r.text[:200])
+        time.sleep(1)
+
     for i, m in enumerate(messages):
         send_message(m)
         if i < len(messages) - 1:
@@ -611,7 +651,7 @@ def main():
         # Тест: публікуємо, але НЕ записуємо в published / last_date
         messages, qid, title = prepare(run_start)
         if messages:
-            publish(messages)
+            publish(messages, title)
             print(f"Great Clubs TEST published ({len(messages)} msgs). "
                   f"State NOT updated (qid={qid} will be available for real run).")
         else:
@@ -663,7 +703,8 @@ def main():
         print("Great Clubs: nothing to publish")
         return
 
-    publish(messages)
+    pub_title = state.get("current_title") or ""
+    publish(messages, pub_title)
 
     if qid and qid not in state["published"]:
         state["published"].append(qid)
