@@ -71,6 +71,8 @@ DOMESTIC_CUPS = {
 }
 
 # Європейські турніри
+
+
 UCL = "Q187664"          # Champions League
 UEL = "Q18756"           # Europa League / UEFA Cup
 
@@ -347,7 +349,7 @@ def choose_next_club(state) -> dict | None:
 
     need_refresh = (
         not state.get("pool_cache")
-        or state.get("pool_updated", "") < today[:8]
+        or state.get("pool_updated", "") < today  # повна дата YYYY-MM-DD
     )
     if need_refresh:
         try:
