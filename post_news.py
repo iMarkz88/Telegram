@@ -448,7 +448,7 @@ def build_caption(head, body, limit=1024):
     head = re.sub(r"https?://\S+", "", head).strip()
     body = re.sub(r"https?://\S+", "", body).strip()
     while True:
-        cap = f"<b>{html.escape(head)}</b>\n\n{html.escape(body)}"
+        cap = f"<b>{html.escape(head, quote=False)}</b>\n\n{html.escape(body, quote=False)}"
         if len(cap) <= limit:
             return cap
         body = body[: int(len(body) * 0.9)]

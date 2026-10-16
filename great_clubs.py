@@ -522,7 +522,7 @@ def build_messages(text: str, ua_title: str) -> list[str]:
     raw_paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
     pieces = []
     for para in raw_paragraphs:
-        pieces.extend(split_long(html.escape(para)))
+        pieces.extend(split_long(html.escape(para, quote=False)))
 
     messages = []
     current = head

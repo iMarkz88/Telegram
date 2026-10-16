@@ -635,7 +635,7 @@ def build_messages(lines, day, month):
     cont = "⚽ <b>Цього дня в історії футболу (продовження)</b>\n\n"
     messages, current = [], head
     for ln in lines:
-        ln = html.escape(ln)
+        ln = html.escape(ln, quote=False)
         if len(current) + len(ln) + 2 > TG_LIMIT and current not in (head, cont):
             messages.append(current.rstrip())
             current = cont

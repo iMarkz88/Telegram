@@ -448,7 +448,7 @@ def build_messages(text: str, ua_title: str) -> list:
 
     pieces = []
     for para in [p.strip() for p in text.split("\n") if p.strip()]:
-        pieces.extend(split_long(html.escape(para)))
+        pieces.extend(split_long(html.escape(para, quote=False)))
 
     messages, current = [], head
     for piece in pieces:
@@ -568,7 +568,7 @@ def publish(messages: list, ua_title: str = ""):
     api = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}"
     img = PLAYERS_IMAGE
     if img and os.path.exists(img):
-        caption = f"⚽ <b>Великі футболісти</b>\n📅 {html.escape(ua_title or '')}"
+        caption = f"⚽ <b>Великі футболісти</b>\n📅 {html.escape(ua_title or '', quote=False)}"
         with open(img, "rb") as f:
             r = requests.post(
                 f"{api}/sendPhoto",
