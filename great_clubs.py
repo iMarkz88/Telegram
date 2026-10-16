@@ -50,7 +50,7 @@ TOP_LEAGUES = {
     "Q202999": "Scottish Premiership",   # Scotland
     "Q167277": "Süper Lig",              # Turkey
     "Q182994": "Ukrainian Premier League",
-    "Q831202": "Campeonato Brasileiro Série A",  # Brazil
+    "Q206813": "Campeonato Brasileiro Série A",  # Brazil
 }
 
 # Національні кубки (основні)
@@ -73,8 +73,10 @@ DOMESTIC_CUPS = {
 # Європейські турніри
 
 
-UCL = "Q187664"          # Champions League
-UEL = "Q18756"           # Europa League / UEFA Cup
+UCL = "Q18756"           # UEFA Champions League (correct QID)
+UEL = "Q18760"           # UEFA Europa League
+UEL_OLD = "Q715496"      # UEFA Cup (historical name)
+EUROPEAN_CUP = "Q751471" # European Cup (pre-rebrand seasons on WD)
 
 
 def run_sparql(query: str, timeout: int = 90):
@@ -97,31 +99,49 @@ def run_sparql(query: str, timeout: int = 90):
     raise last_error
 
 
-def fetch_competition_winners(comp_qid: str, since: int = 1990, label: str = "") -> list[dict]:
-    """Універсальний запит переможців будь-якого турніру з певного року."""
+def fetch_competition_winners(comp_qids, since: int = 1990, label: str = "") -> list[dict]:
+    """Переможці турніру. Рік беремо з P585 або з назви сезону (1999–2000 → 1999)."""
+    if isinstance(comp_qids, str):
+        comp_qids = [comp_qids]
+    values = " ".join(f"wd:{q}" for q in comp_qids)
     query = f"""
-    SELECT DISTINCT ?club ?clubLabel ?year WHERE {{
-      ?award wdt:P1346 ?club .
-      ?award wdt:P3450 wd:{comp_qid} .
-      ?award wdt:P585 ?date .
-      BIND(YEAR(?date) AS ?year)
-      FILTER(?year >= {since})
-      SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en,uk". }}
+    SELECT DISTINCT ?club ?clubLabel ?seasonLabel ?date WHERE {{
+      VALUES ?comp {{ {values} }}
+      ?season wdt:P3450 ?comp .
+      ?season wdt:P1346 ?club .
+      OPTIONAL {{ ?season wdt:P585 ?date }}
+      ?season rdfs:label ?seasonLabel . FILTER(LANG(?seasonLabel) = "en")
+      # тільки футбольні клуби
+      ?club wdt:P31/wdt:P279* wd:Q476028 .
+      SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
     }}
-    ORDER BY ?year
+    LIMIT 500
     """
     try:
-        rows = run_sparql(query, timeout=60)
+        rows = run_sparql(query, timeout=90)
     except Exception as e:
-        print(f"  {label or comp_qid} query failed: {e}")
+        print(f"  {label or comp_qids} query failed: {e}")
         return []
     out = []
     for b in rows:
         qid = b["club"]["value"].rsplit("/", 1)[-1]
         name = b.get("clubLabel", {}).get("value", "")
-        year = int(b["year"]["value"])
-        if name and not name.startswith("Q"):
-            out.append({"qid": qid, "name": name, "year": year, "source": label or comp_qid})
+        if not name or name.startswith("Q"):
+            continue
+        year = None
+        if "date" in b:
+            try:
+                year = int(b["date"]["value"][:4])
+            except Exception:
+                pass
+        if year is None:
+            lab = b.get("seasonLabel", {}).get("value", "")
+            m = re.search(r"(19|20)\d{2}", lab)
+            if m:
+                year = int(m.group(0))
+        if year is None or year < since:
+            continue
+        out.append({"qid": qid, "name": name, "year": year, "source": label or "comp"})
     return out
 
 
@@ -169,18 +189,21 @@ def fetch_cup_winners() -> list[dict]:
 
 
 def fetch_ucl_uel() -> list[dict]:
-    """Переможці ЛЧ та Ліги Європи з 1990 — найчистіше джерело."""
+    """Переможці ЛЧ / Кубка чемпіонів та Ліги Європи / Кубка УЄФА з 1990."""
     out = []
-    for qid, label in [(UCL, "UCL"), (UEL, "UEL")]:
-        rows = fetch_competition_winners(qid, since=1990, label=label)
-        out.extend(rows)
-        print(f"    {label}: {len(rows)}")
+    ucl_rows = fetch_competition_winners([UCL, EUROPEAN_CUP], since=1990, label="UCL")
+    print(f"    UCL: {len(ucl_rows)}")
+    out.extend(ucl_rows)
+    uel_rows = fetch_competition_winners([UEL, UEL_OLD], since=1990, label="UEL")
+    print(f"    UEL: {len(uel_rows)}")
+    out.extend(uel_rows)
     return out
 
 
 def fetch_major_league_champions() -> list[dict]:
-    """Чемпіони тільки великих ліг. Фільтр по sitelinks, щоб відсіяти дрібні клуби."""
-    # Тільки Big-5 + Португалія, Нідерланди, Україна, Бразилія
+    """Чемпіони Big-5 + Португалія, Нідерланди, Україна, Бразилія.
+    Рік з P585 або з назви сезону. Тільки association football clubs, sitelinks >= 30.
+    """
     major = {
         "Q9448": "Premier League",
         "Q15804": "Serie A",
@@ -190,23 +213,22 @@ def fetch_major_league_champions() -> list[dict]:
         "Q167541": "Eredivisie",
         "Q219967": "Primeira Liga",
         "Q182994": "Ukrainian Premier League",
-        "Q831202": "Campeonato Brasileiro Série A",
+        "Q206813": "Campeonato Brasileiro Série A",
     }
     league_values = " ".join(f"wd:{qid}" for qid in major)
     query = f"""
-    SELECT DISTINCT ?club ?clubLabel ?year ?sl WHERE {{
+    SELECT DISTINCT ?club ?clubLabel ?seasonLabel ?date ?sl WHERE {{
       VALUES ?league {{ {league_values} }}
       ?season wdt:P3450 ?league .
       ?season wdt:P1346 ?club .
-      ?season wdt:P585 ?date .
+      OPTIONAL {{ ?season wdt:P585 ?date }}
+      ?season rdfs:label ?seasonLabel . FILTER(LANG(?seasonLabel) = "en")
       ?club wikibase:sitelinks ?sl .
-      FILTER(?sl >= 25)
-      BIND(YEAR(?date) AS ?year)
-      FILTER(?year >= 1990 && ?year <= 2026)
+      FILTER(?sl >= 30)
+      ?club wdt:P31/wdt:P279* wd:Q476028 .
       SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
     }}
-    ORDER BY DESC(?sl) ?year
-    LIMIT 300
+    LIMIT 500
     """
     try:
         rows = run_sparql(query, timeout=120)
@@ -217,10 +239,25 @@ def fetch_major_league_champions() -> list[dict]:
     for b in rows:
         qid = b["club"]["value"].rsplit("/", 1)[-1]
         name = b.get("clubLabel", {}).get("value", "")
-        year = int(b["year"]["value"])
-        if name and not name.startswith("Q"):
-            out.append({"qid": qid, "name": name, "year": year, "source": "league"})
+        if not name or name.startswith("Q"):
+            continue
+        year = None
+        if "date" in b:
+            try:
+                year = int(b["date"]["value"][:4])
+            except Exception:
+                pass
+        if year is None:
+            lab = b.get("seasonLabel", {}).get("value", "")
+            m = re.search(r"(19|20)\d{2}", lab)
+            if m:
+                year = int(m.group(0))
+        if year is None or year < 1990 or year > 2026:
+            continue
+        out.append({"qid": qid, "name": name, "year": year, "source": "league"})
     return out
+
+
 
 
 def build_club_pool() -> list[dict]:
