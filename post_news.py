@@ -78,15 +78,23 @@ SKIP_WORDS = (
     "пропустять", "пропустить матч", "дискваліфікац", "дисквалификац",
     "заявка на матч", "заявки на тур", "склад на матч",
     "травмовані перед", "травми перед туром",
-)
+    # побут / медицина / раціон
+    "дієтолог", "диетолог", "раціон", "рацион", "харчуван", "питание",
+    "перекуси", "сендвіч", "меню команди",
+    # дрібна готовність гравця до матчу
+    "отримав можливість зіграти", "зможе взяти участь", "зможе зіграти",
+    "готовий вийти на поле", "готов выйти",
 
+)
 # News whose TITLE contains one of these whole words are never published.
 SKIP_TITLE_RE = re.compile(
     r"\b(відео|видео|футзал|futsal|u-?19|u-?21|u-?17|u-?20)\b|"
     r"жіноч\w*\s+збірн|жіноч\w*\s+футбол|women.?s\s+football|"
     r"кадрові\s+втрат|кадрові\s+новин|"
     r"хто\s+пропустить|пропустять\s+матч|"
-    r"склад\s+на\s+(матч|тур)|заявка\s+на\s+(матч|тур)",
+    r"склад\s+на\s+(матч|тур)|заявка\s+на\s+(матч|тур)|"
+    r"раціон|дієтолог|харчуван|"
+    r"отримав\s+можливість\s+зіграти|зможе\s+(взяти\s+участь|зіграти)",
     re.IGNORECASE,
 )
 
@@ -398,6 +406,26 @@ def ask_openai_compat(name, prompt):
         return r.json()["choices"][0]["message"]["content"].strip()
 
 
+
+def news_depth(title: str, text: str) -> str:
+    """short | medium | long — за багатством джерела, не роздувати воду."""
+    blob = f"{title or ''}\n{text or ''}"
+    n = len(blob)
+    quotes = len(re.findall(r'[«"][^«»"]{20,}[»"]', blob)) + blob.count("—")
+    has_score = bool(_SCORE_RE.search(blob))
+    has_quote_verbs = bool(re.search(
+        r"сказав|заявив|відповів|прокоментував|наголосив|підкреслив|"
+        r"said|told|stated|commented",
+        blob, re.I,
+    ))
+    # багато деталей
+    if n >= 1200 and (quotes >= 1 or has_quote_verbs or has_score):
+        return "long"
+    if n >= 700 or has_quote_verbs or has_score or quotes >= 1:
+        return "medium"
+    return "short"
+
+
 def rewrite(title, text, omit_score=False):
     """Returns (headline, body). Raises RewriteFailed if AI is configured but all engines failed."""
     engines = []
@@ -408,6 +436,26 @@ def rewrite(title, text, omit_score=False):
             engines.append((n, lambda p, n=n: ask_openai_compat(n, p)))
     if not engines:
         return "⚽ " + title, text[:500]
+
+
+    depth = news_depth(title, text)
+    if depth == "short":
+        volume = (
+            "ОБСЯГ: 350–550 символів. Новина коротка — не роздувай. "
+            "2–4 речення по суті, без води й повторів."
+        )
+    elif depth == "medium":
+        volume = (
+            "ОБСЯГ: 650–950 символів. Є кілька фактів — виклади їх чітко. "
+            "Цитату можна одну коротку, якщо вона в оригіналі."
+        )
+    else:
+        volume = (
+            "ОБСЯГ: 1000–1500 символів. У джерелі багато деталей (цитати, рахунок, контекст) — "
+            "розкрий їх: ключові цитати, рахунок/турнір, важливий бекграунд. "
+            "Без води й повторів одних і тих самих думок."
+        )
+    print(f"  rewrite depth={depth}")
 
     prompt = (
         "Ти редактор українського футбольного Telegram-каналу «football 90+». "
@@ -432,11 +480,11 @@ def rewrite(title, text, omit_score=False):
         "- українська; іноземні назви — латиниця; українські назви — українською "
         "(Шахтар, Динамо Київ, Артем Бондаренко);\n"
         "- жива, але стримана мова без емоційних оцінок.\n\n"
-        "ОБСЯГ: 450-720 символів.\n\n"
+        "ОБСЯГ: дивись блок нижче (коротко / середньо / детально).\n\n"
         "ФОРМАТ ВІДПОВІДІ:\n"
         "Перший рядок — короткий заголовок з одним емодзі на початку. "
         "Далі порожній рядок і текст новини.\n\n"
-        f"ОРИГІНАЛЬНИЙ ЗАГОЛОВОК: {title}\n\n"
+        f"{volume}\n\nОРИГІНАЛЬНИЙ ЗАГОЛОВОК: {title}\n\n"
         f"ОРИГІНАЛЬНИЙ ТЕКСТ:\n{text}"
     )
     reasons = []
@@ -467,6 +515,7 @@ def rewrite(title, text, omit_score=False):
 
 
 def build_caption(head, body, limit=1024):
+    """limit=1024 for photo captions; for text posts pass limit=3900."""
     head = re.sub(r"https?://\S+", "", head).strip()
     body = re.sub(r"https?://\S+", "", body).strip()
     while True:
@@ -477,6 +526,9 @@ def build_caption(head, body, limit=1024):
         cut = body.rfind(". ")
         if cut > 100:
             body = body[: cut + 1]
+        if len(body) < 80:
+            return cap[:limit]
+
 
 
 def send(caption, image):
@@ -660,7 +712,9 @@ def main():
                     print(f"  AI unavailable, trying again in {RETRY_PAUSE_SEC:.0f} s "
                           f"({left / 60:.1f} min of retry window left)")
                     time.sleep(RETRY_PAUSE_SEC)
-            send(build_caption(head, body), image if USE_SOURCE_IMAGE else "")
+            img = image if USE_SOURCE_IMAGE else ""
+            cap_limit = 1024 if img else 3900
+            send(build_caption(head, body, limit=cap_limit), img)
             seen.append(k); seen_set.add(k)
             sc = None
             for a, b in _SCORE_RE.findall(f"{it['title']} {text[:400]}"):
