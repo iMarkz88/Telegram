@@ -470,7 +470,7 @@ def rewrite(title, text, omit_score=False):
         "Якщо в оригіналі не сказано «травма» — не пиши «травма». Якщо не сказано «нарешті» — не пиши «нарешті»;\n"
         "- ЗАМІНЮВАТИ назви клубів, стадіонів, людей. Пиши їх ТОЧНО як в оригіналі "
         "(якщо в оригіналі «Аль-Ахлі» — пиши «Аль-Ахлі»; якщо «Marino Pusic» — пиши «Marino Pusic»; "
-        "якщо «Френкі де Йонг» — пиши «Френкі де Йонг»). Не вигадуй інших тренерів;\\n
+        "якщо «Френкі де Йонг» — пиши «Френкі де Йонг»). Не вигадуй інших тренерів;\n"
         "- ВИГАДУВАТИ прогнози, припущення, причини («схоже», «ймовірно», «можливо», "
         "«подивимось», «здається», «мабуть»);\n"
         "- ВИКОРИСТОВУВАТИ російські літери (ы, э, ё, ъ);\n"
@@ -592,14 +592,29 @@ def load_state():
     return data
 
 
-def save_state(seen, feeds, last_post=0, recent_matches=None):
+def save_state(seen, feeds, last_post=0, recent_matches=None, morning_buffer=None):
     payload = {
         "seen": list(seen)[-1500:],
         "feeds": sorted(feeds),
         "last_post": last_post,
         "recent_matches": list(recent_matches or [])[-80:],
+        "morning_buffer": morning_buffer or {},
     }
-    STATE_FILE.write_text(json.dumps(payload, ensure_ascii=False))
+    STATE_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=0))
+
+
+def kyiv_date_str():
+    return datetime.now(ZoneInfo("Europe/Kyiv")).strftime("%Y-%m-%d")
+
+
+def is_morning_window():
+    """Перші години після пробудження (QUIET_TO … QUIET_TO+3 год) — зона ранкового буфера."""
+    end = to_minutes(QUIET_TO)
+    now = kyiv_minutes()
+    # 3 години після кінця тихої години
+    span = 3 * 60
+    # quiet crosses midnight → QUIET_TO is morning
+    return end <= now < end + span
 
 
 def main():
@@ -648,36 +663,105 @@ def main():
 
     candidates.sort(key=lambda c: c[1]["ts"])
 
+    morning = dict(state.get("morning_buffer") or {})
+    today = kyiv_date_str()
+    if morning.get("date") != today:
+        morning = {}  # новий день — новий буфер
+
     if in_quiet_hours():
-        if QUIET_DISCARD:  # night news are forgotten, the morning starts fresh
-            for k, _ in candidates:
-                seen.append(k); seen_set.add(k)
-        print(f"Quiet hours ({QUIET_FROM}-{QUIET_TO} Kyiv): not posting.")
-        save_state(seen, known_feeds, last_post, recent_matches)
+        # Не публікуємо. Кандидатів у seen НЕ пишемо — вранці вони
+        # потраплять у morning_buffer (00:22, 23:45 …) і підуть у запас.
+        # QUIET_DISCARD більше не стирає нічний пул (інакше буфер порожній).
+        print(f"Quiet hours ({QUIET_FROM}-{QUIET_TO} Kyiv): not posting "
+              f"(candidates kept for morning buffer: {len(candidates)}).")
+        save_state(seen, known_feeds, last_post, recent_matches, morning)
         return
 
-    # Oldest first, so the channel keeps chronological order. Items that did not
-    # fit into this run stay in the queue; items older than MAX_AGE_HOURS are dropped.
     now = now_ts()
-    queue = []
+    # відкинути занадто старі з кандидатів
+    fresh_cands = []
     for k, it in candidates:
         if it["ts"] and now - it["ts"] > MAX_AGE_HOURS * 3600:
-            seen.append(k); seen_set.add(k)  # too old, skip for good
+            seen.append(k); seen_set.add(k)
         else:
-            queue.append((k, it))
-    print(f"Queue: {len(queue)} item(s) waiting")
+            fresh_cands.append((k, it))
 
-    wait = POST_INTERVAL_MIN * 60 - 150 - (now - last_post)  # 150 s grace for run jitter
+    buffer_keys = set(morning.get("keys") or [])
+    buffer_items = list(morning.get("items") or [])  # [{k, title, link, ts, summary, content, image}]
+
+    # Нові = є в RSS зараз, але не в буфері і не в seen
+    brand_new = [(k, it) for k, it in fresh_cands if k not in buffer_keys]
+
+    queue = []
+    phase = morning.get("phase")  # None | "buffered" | "draining" | "live"
+
+    if not morning and is_morning_window() and fresh_cands:
+        # === ЗАХІД 1: перший раз після пробудження — тільки запам'ятати ===
+        morning = {
+            "date": today,
+            "phase": "buffered",
+            "keys": [k for k, _ in fresh_cands],
+            "items": [
+                {
+                    "k": k,
+                    "title": it["title"],
+                    "link": it["link"],
+                    "ts": it.get("ts") or 0,
+                    "summary": it.get("summary") or "",
+                    "content": it.get("content") or "",
+                    "image": it.get("image") or "",
+                }
+                for k, it in fresh_cands
+            ],
+        }
+        print(f"Morning buffer: remembered {len(fresh_cands)} item(s), not posting this run.")
+        save_state(seen, known_feeds, last_post, recent_matches, morning)
+        return
+
+    if morning.get("phase") in ("buffered", "draining") and not brand_new:
+        # === Немає нових — публікуємо запас від НАЙСВІЖІШИХ ===
+        morning["phase"] = "draining"
+        # items ще не в seen
+        pending = [x for x in buffer_items if x["k"] not in seen_set]
+        pending.sort(key=lambda x: -float(x.get("ts") or 0))  # newest first
+        for x in pending:
+            it = {
+                "title": x["title"],
+                "link": x["link"],
+                "ts": x.get("ts") or 0,
+                "summary": x.get("summary") or "",
+                "content": x.get("content") or "",
+                "image": x.get("image") or "",
+            }
+            queue.append((x["k"], it))
+        print(f"Morning drain: {len(queue)} buffered item(s), newest first.")
+    elif brand_new:
+        # === З'явились нові — забуваємо буфер, постимо тільки нові ===
+        if morning:
+            print(f"Fresh news appeared ({len(brand_new)}) — discarding morning buffer "
+                  f"({len(buffer_keys)} old keys).")
+        morning = {"date": today, "phase": "live", "keys": [], "items": []}
+        # newest first among new
+        brand_new.sort(key=lambda c: -(c[1].get("ts") or 0))
+        queue = brand_new
+        # свіжа хвиля — можна кілька за раз (до 3), не чекаючи 20 хв між кожною
+        morning["_burst"] = min(3, max(MAX_PER_RUN, len(queue)))
+        print(f"Queue (fresh): {len(queue)} item(s), burst up to {morning['_burst']}")
+    else:
+        # Звичайний день / буфер уже порожній — як раніше, oldest first
+        queue = list(fresh_cands)
+        queue.sort(key=lambda c: c[1].get("ts") or 0)
+        print(f"Queue: {len(queue)} item(s) waiting")
+
+    wait = POST_INTERVAL_MIN * 60 - 150 - (now - last_post)
     if queue and wait > 0:
         print(f"Not due yet: next post in about {int(wait // 60) + 1} min.")
         queue = []
 
-    # Work through the queue: every item gets its own retry window. An item that cannot be
-    # processed now stays in the queue and the next one is tried; each finished item is
-    # published immediately.
     posted_now, attempts, failed_in_row = 0, 0, 0
     for k, it in queue:
-        if posted_now >= MAX_PER_RUN or attempts >= MAX_PER_RUN + 4:
+        limit = int(morning.get("_burst") or MAX_PER_RUN)
+        if posted_now >= limit or attempts >= limit + 4:
             break
         if now_ts() - run_start > RUN_BUDGET_MIN * 60:
             print("Run time budget used up - the rest follows on the next run.")
@@ -686,19 +770,18 @@ def main():
         item_start = now_ts()
         print("Processing:", it["title"])
         try:
-            text = to_text(it["content"]) or to_text(it["summary"])
-            image = it["image"]
-            if FETCH_ARTICLE:
+            text = to_text(it.get("content") or "") or to_text(it.get("summary") or "")
+            image = it.get("image") or ""
+            if FETCH_ARTICLE and it.get("link"):
                 full, og = fetch_article(it["link"])
                 if len(full) > len(text):
                     text = full
                 image = image or og
-            # якщо про цю гру вже писали — публікуємо, але без повторного рахунку/місця
             same = find_same_match(it["title"], text, recent_matches, hours=36)
             omit_score = same is not None
             if omit_score:
                 print(f"  same match follow-up (no score/venue): {it['title'][:80]}")
-            while True:  # retry the AI until it works or this item's retry window is over
+            while True:
                 try:
                     head, body = rewrite(it["title"], text or it["title"], omit_score=omit_score)
                     break
@@ -713,6 +796,12 @@ def main():
             cap_limit = 1024 if img else 3900
             send(build_caption(head, body, limit=cap_limit), img)
             seen.append(k); seen_set.add(k)
+            # прибрати з буфера, якщо це був drain
+            if morning.get("items"):
+                morning["items"] = [x for x in morning["items"] if x["k"] != k]
+                morning["keys"] = [x for x in (morning.get("keys") or []) if x != k]
+                if not morning["items"]:
+                    morning["phase"] = "live"
             sc = None
             for a, b in _SCORE_RE.findall(f"{it['title']} {text[:400]}"):
                 ai, bi = int(a), int(b)
@@ -731,7 +820,7 @@ def main():
             failed_in_row = 0
             print("  Published.")
             if posted_now < MAX_PER_RUN:
-                time.sleep(2)  # be gentle with Telegram between posts
+                time.sleep(2)
         except RewriteFailed:
             failed_in_row += 1
             print("  Could not be processed now - it stays in the queue, trying the next one.")
@@ -741,9 +830,10 @@ def main():
         except Exception as e:
             print("  failed, will retry next run:", e)
 
-    save_state(seen, known_feeds, last_post, recent_matches)
+    save_state(seen, known_feeds, last_post, recent_matches, morning)
     print(f"Done. Published this run: {posted_now}; still waiting in the queue: "
           f"{max(0, len(queue) - posted_now)}.")
+
 
 
 if __name__ == "__main__":
