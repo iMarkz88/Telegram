@@ -676,6 +676,71 @@ def is_morning_window():
     return end <= now < end + span
 
 
+
+# --- UPL / Europe / Transfer classification ---
+_UPL_RE = re.compile(
+    r"упл|українськ\w*\s+прем.?єр|прем.?єр.?ліг\w*\s+україн|"
+    r"\bшахтар\b|\bдинамо\b|\bдинамо київ\b|\bолександрі\w*|\bкривбас\b|"
+    r"\bвереc\b|\bвереса\b|\bзоря\b|\bколос\b|\bрух\b|\bкарпати\b|"
+    r"\bчорноморець\b|\bлятий\b|\bлівий берег\b|\bоболонь\b|\bполісся\b|"
+    r"\bінгулець\b|\bметаліст\b|\bскіф\b|"
+    r"збірн\w*\s+україн|україн\w*\s+збірн|збірна україни|"
+    r"уаф|\bffu\b",
+    re.I,
+)
+# виправлення верес
+_UPL_RE = re.compile(
+    r"упл|українськ\w*\s+прем.?єр|прем.?єр.?ліг\w*\s+україн|"
+    r"\bшахтар\b|динамо\s*київ|\bдинамо\b(?!\s*бухарест)|"
+    r"\bолександрі\w*|\bкривбас\b|\bвереса?\b|\bзоря\b|\bколос\b|"
+    r"\bрух\b(?:\s+львів)?|\bкарпати\b|\bчорноморець\b|\bлятий берег\b|"
+    r"\bоболонь\b|\bполісся\b|\bінгулець\b|\bметаліст\b|"
+    r"збірн\w*\s+україн|україн\w*\s+збірн|збірна україни|уаф",
+    re.I,
+)
+_TRANSFER_RE = re.compile(
+    r"трансфер|переход\w*|перехід\w*|слухи?\s+о\s+переход|слухи?\s+про\s+перехід|"
+    r"може\s+перейти|близьк\w*\s+до\s+переходу|інтерес\w*\s+до\s+\w+|"
+    r"пропозиці\w*\s+про\s+трансфер|викуп\w*\s+контракт|"
+    r"продовж\w*\s+контракт|підписав\s+контракт|підписання\s+контракт|"
+    r"новий\s+контракт|пролонгац|renewal|contract\s+extension|"
+    r"transfer\s+rumour|transfer\s+rumor|\btransfer\b|"
+    r"оренда\w*(?:\s+в|\s+до|\s+з)|відда\w*\s+в\s+оренду|"
+    r"сума\s+трансфер|трансферн\w*\s+вартіст|"
+    r"покидає\s+клуб|залишить\s+клуб|розірв\w*\s+контракт",
+    re.I,
+)
+
+
+def news_bucket(title: str, text: str = "") -> str:
+    """transfer | upl | europe"""
+    blob = f"{title or ''} {text or ''}"
+    if _TRANSFER_RE.search(blob):
+        return "transfer"
+    if _UPL_RE.search(blob):
+        return "upl"
+    return "europe"
+
+
+def pick_main_three(upl: list, europe: list) -> list:
+    """До 3 новин: ідеал 2 europe + 1 upl; гнучко 3:0 / 1:2 / 0:3."""
+    eu = list(europe)
+    ua = list(upl)
+    chosen = []
+    # спочатку 2 EU
+    while len(chosen) < 2 and eu:
+        chosen.append(eu.pop(0))
+    # 1 UPL
+    if ua:
+        chosen.append(ua.pop(0))
+    # добиваємо до 3 чим є
+    pool = eu + ua
+    while len(chosen) < 3 and pool:
+        chosen.append(pool.pop(0))
+    return chosen
+
+
+
 def main():
     if "TELEGRAM_BOT_TOKEN" not in os.environ:
         sys.exit("TELEGRAM_BOT_TOKEN is not set")
@@ -811,6 +876,31 @@ def main():
         queue = list(fresh_cands)
         queue.sort(key=lambda c: c[1].get("ts") or 0)
         print(f"Queue: {len(queue)} item(s) waiting")
+
+
+    # --- баланс УПЛ / Європа / трансфери ---
+    # queue зараз: list[(k, it)]
+    upl_q, eu_q, tr_q = [], [], []
+    for k, it in queue:
+        b = news_bucket(it.get("title") or "", to_text(it.get("summary") or "")[:300])
+        if b == "transfer":
+            tr_q.append((k, it))
+        elif b == "upl":
+            upl_q.append((k, it))
+        else:
+            eu_q.append((k, it))
+    # свіжіші першими в кожному кошику
+    for lst in (upl_q, eu_q, tr_q):
+        lst.sort(key=lambda c: -(c[1].get("ts") or 0))
+
+    main_q = pick_main_three(upl_q, eu_q)
+    # трансфери — усі підряд після основної трійки
+    queue = main_q + tr_q
+    morning["_burst"] = len(queue)  # у цьому run можна всі (3 + N трансферів)
+    print(
+        f"Buckets: EU={len(eu_q)} UPL={len(upl_q)} TRANSFER={len(tr_q)} → "
+        f"post main={len(main_q)} + transfers={len(tr_q)}"
+    )
 
     wait = POST_INTERVAL_MIN * 60 - 150 - (now - last_post)
     if queue and wait > 0:
