@@ -1358,7 +1358,8 @@
 "09a4db1a8c6cb0e4",
 "9c99cca4fd02caf4",
 "1f5fa42cee5eb84a",
-"4ec9121aceb06c0a"
+"4ec9121aceb06c0a",
+"815b8281ab1831e3"
 ],
 "feeds": [
 "https://24tv.ua/rss/all.xml",
@@ -3941,6 +3942,6 @@
 "phase": "live",
 "keys": [],
 "items": [],
-"_burst": 4
+"_burst": 3
 }
 }
