@@ -245,6 +245,86 @@ def wikipedia_feed(api_kind, month, day):
     return out
 
 
+
+# ------------------------------------------------------------------ footballsite.co.uk OTD
+
+_MONTH_SLUG = {
+    1: "01Jan", 2: "02Feb", 3: "03Mar", 4: "04Apr",
+    5: "05May", 6: "06Jun", 7: "07Jul", 8: "08Aug",
+    9: "09Sep", 10: "10Oct", 11: "11Nov", 12: "12Dec",
+}
+_DAY_ORD = {
+    1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 5: "5th", 6: "6th", 7: "7th",
+    8: "8th", 9: "9th", 10: "10th", 11: "11th", 12: "12th", 13: "13th",
+    14: "14th", 15: "15th", 16: "16th", 17: "17th", 18: "18th", 19: "19th",
+    20: "20th", 21: "21st", 22: "22nd", 23: "23rd", 24: "24th", 25: "25th",
+    26: "26th", 27: "27th", 28: "28th", 29: "29th", 30: "30th", 31: "31st",
+}
+
+
+def footballsite_events(month: int, day: int) -> list:
+    """Події «Football On This Day» з footballsite.co.uk (англійський футбол + світ)."""
+    slug = _MONTH_SLUG.get(month)
+    if not slug:
+        return []
+    url = f"https://www.footballsite.co.uk/OTD/{slug}.htm"
+    try:
+        r = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; football90-digest/1.0)",
+                "Accept": "text/html",
+            },
+            timeout=25,
+        )
+        r.raise_for_status()
+        html_text = r.text
+    except Exception as e:
+        print(f"  footballsite OTD failed: {e}")
+        return []
+
+    # Прибираємо теги для простішого парсу, лишаємо текст
+    plain = re.sub(r"<br\s*/?>", "\n", html_text, flags=re.I)
+    plain = re.sub(r"<[^>]+>", " ", plain)
+    plain = html.unescape(plain)
+    plain = re.sub(r"[ \t]+", " ", plain)
+
+    day_ord = _DAY_ORD.get(day, f"{day}th")
+    # Блок дня: від "17th October" / "Football On This Day – 17th October" до наступного дня
+    # Шукаємо всі "Football On This Day – 17th October YYYY"
+    pat = re.compile(
+        rf"Football On This Day\s*[–\-—]\s*{day_ord}\s+\w+\s+(\d{{4}})\s*(.*?)(?=Football On This Day\s*[–\-—]|\*\d|\Z)",
+        re.I | re.S,
+    )
+    out = []
+    for m in pat.finditer(plain):
+        year = int(m.group(1))
+        body = re.sub(r"\s+", " ", m.group(2)).strip()
+        # обрізати «Link - ...»
+        body = re.split(r"\bLink\s*[-–]", body, maxsplit=1)[0].strip()
+        if len(body) < 60:
+            continue
+        if year < 1860 or year > 2030:
+            continue
+        # відсів явного не-футболу / жіночого (рідко на цьому сайті)
+        if FOOT_NO.search(body):
+            continue
+        out.append({
+            "kind": "event",
+            "year": year,
+            "qid": "",
+            "name": "",
+            "desc": "",
+            "score": 40 + min(len(body) // 40, 20),  # події з сайту — високий пріоритет
+            "ua": False,
+            "text": body[:900],
+            "source": "footballsite",
+        })
+    print(f"  footballsite OTD: {len(out)} event(s) for {day:02d}.{month:02d}")
+    return out
+
+
+
 def collect(month, day):
     people = wikidata_people(month, day)
     best = {}
@@ -260,6 +340,10 @@ def collect(month, day):
             if it["qid"] and it["qid"] in known:
                 continue
             items.append(it)
+
+    # спеціалізовані події (пріоритет вище за «сухі» народження)
+    for it in footballsite_events(month, day):
+        items.append(it)
 
     # збагачуємо біографії клубами/нагородами (лише people з qid)
     enriched = []
@@ -439,6 +523,11 @@ def verify_on_this_day(item, month, day):
     text = item.get("text") or ""
     if len(text) < 40:
         return False
+    # footballsite — вже тематичний футбольний архів
+    if item.get("source") == "footballsite":
+        if FOOT_NO.search(text):
+            return False
+        return True
     if FOOT_NO.search(text) or not EVENT_YES.search(text):
         return False
     if re.search(r"\bOlympic", text, re.I) and not re.search(r"football|soccer|FIFA", text, re.I):
@@ -481,6 +570,8 @@ def select(items, total):
     by_score = lambda xs: sorted(xs, key=lambda i: -i["score"])
 
     events = [i for i in items if i["kind"] == "event" and len((i.get("text") or "")) >= 40]
+    # footballsite / довгі події — першими
+    events.sort(key=lambda i: (-(1 if i.get("source") == "footballsite" else 0), -i.get("score", 0), -len(i.get("text") or "")))
     # лише з трофеями/досягненнями (is_thin_person відсікає «просто грав»)
     rich_births = [i for i in items if i["kind"] == "birth" and not is_thin_person(i)]
     rich_deaths = [i for i in items if i["kind"] == "death" and not is_thin_person(i)]
